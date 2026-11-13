@@ -18,6 +18,7 @@ use tokio::{
     signal::unix::{Signal as OsSignal, SignalKind, signal},
     time::timeout,
 };
+use tracing::error;
 
 use crate::{
     boot_model::{Activity, JobKind, JobResult, SHELL_UNITS, UnitFacts, UnitKind, UnitTimeouts},
@@ -188,13 +189,38 @@ async fn termination_request(listener: io::Result<OsSignal>) {
 pub async fn restore_status_after_watch(
     watch: impl Future<Output = Result<StatusRelease, Error>>,
 ) -> Result<(), Error> {
+    let silenced_status = SilencedStatus;
     let terminated = termination_request(signal(SignalKind::terminate()));
     let watched = watch.await;
     if !matches!(watched, Ok(StatusRelease::Immediately)) {
         select(pin!(terminated), pin!(boot_finish_or_lost_connection())).await;
     }
-    Session::open(Scope::System)?.restore_configured_status()?;
+    silenced_status.restore()?;
     watched.map(drop)
+}
+
+struct SilencedStatus;
+
+impl SilencedStatus {
+    fn restore(self) -> Result<(), Error> {
+        mem::forget(self);
+        Session::open(Scope::System)?.restore_configured_status()
+    }
+}
+
+impl Drop for SilencedStatus {
+    fn drop(&mut self) {
+        match Session::open(Scope::System) {
+            Ok(session) => {
+                if let Err(error) = session.restore_configured_status() {
+                    error!(error = %error, "could not restore the status output of systemd");
+                }
+            }
+            Err(error) => {
+                error!(error = %error, "could not reach systemd to restore its status output");
+            }
+        }
+    }
 }
 
 impl Session {
