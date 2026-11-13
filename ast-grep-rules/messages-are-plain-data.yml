@@ -1,0 +1,18 @@
+id: messages-are-plain-data
+language: rust
+severity: error
+message: Messages, commands and subscriptions are plain data.
+note: Carry values, not closures or trait objects, so update stays testable with assert_eq and a runtime decides how to act.
+files:
+  - bootvine/src/screen_components/**/*.rs
+rule:
+  any:
+    - kind: dynamic_type
+    - kind: function_type
+    - kind: abstract_type
+  inside:
+    kind: enum_item
+    has:
+      field: name
+      regex: ^(Msg|Cmd|Sub)$
+    stopBy: end

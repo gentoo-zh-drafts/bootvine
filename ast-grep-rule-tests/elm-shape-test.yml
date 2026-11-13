@@ -1,0 +1,13 @@
+id: elm-shape
+valid:
+  - "pub fn update(model: &mut Model, msg: Msg, now: Duration) -> Vec<Cmd> { Vec::new() }"
+  - "pub fn subscriptions(model: &Model) -> Vec<Sub> { Vec::new() }"
+  - "pub fn view<'a>(model: &'a Model, projection: &'a BootProjection, now: Duration) -> ScreenView<'a> { todo!() }"
+  - "#[derive(Clone, Debug, PartialEq, Eq)]\npub enum Cmd { TakeForeground }"
+invalid:
+  - "pub fn update(model: &mut Model, msg: Msg) { }"
+  - "pub fn update(model: &Model, msg: Msg) -> Vec<Cmd> { Vec::new() }"
+  - "pub fn subscriptions(model: &mut Model) -> Vec<Sub> { Vec::new() }"
+  - "pub fn view(model: &mut Model) -> ScreenView { todo!() }"
+  - "#[derive(Clone, Debug)]\npub enum Cmd { TakeForeground }"
+  - "pub enum Sub { BootFeed }"

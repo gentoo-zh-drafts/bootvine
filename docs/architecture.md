@@ -290,15 +290,22 @@ as before.
 While it runs, bootvine:
 
 - **brings `tty12` to the foreground**, and takes it back if something else
-  switches away during the boot;
+  switches away during the boot. When another terminal comes to the front it
+  first asks systemd whether `display-manager.service` is running: a display
+  manager can only switch terminals once it runs, so the answer tells a
+  display manager's switch apart from any other, whichever of the two events
+  bootvine sees first;
 - **quiets the kernel console** by setting the console log level in
   `/proc/sys/kernel/printk` to 1, so only emergency messages reach the
   screen, and sets it again if something raises it;
 - **silences systemd's status output** with the manager's `SetShowStatus`
   call;
-- **repaints every cell every 100 ms during a root switch**, because PID 1
-  writes to the console and resets it while it re-executes, and drawing only
-  the cells that changed would leave that on screen.
+- **repaints every cell when another program writes to `tty12`**, such as PID
+  1 while it re-executes during a root switch, since drawing only the cells
+  that changed would leave that writing on screen. `/dev/vcs12` signals
+  `POLLPRI` on every change to the terminal; after drawing, bootvine reads it
+  once to clear the change its own write caused, so the next signal means
+  another program wrote.
 
 It restores the log level when it hands the console back. It keeps running
 without touching the console until the boot finishes and only then restores the
@@ -350,28 +357,44 @@ Both draw on `/dev/tty12` with `TTYReset=yes` and log to the journal.
 
 ## One event loop
 
-Everything runs on one thread. The service manager, the keyboard, the frame
-timer, password prompts and termination each produce a stream of inputs; the
-streams are merged, applied in batches to a single screen state, and the screen
-is drawn once per batch. The live boot and the scripted demos share this loop
-and differ only in where their inputs come from.
+Everything runs on one thread, shaped as an
+[Elm application](https://guide.elm-lang.org/architecture/):
 
-Inputs wait on the kernel or on systemd rather than on timers:
+- **`Model`** holds the boot, the password prompt, who holds the console and
+  where the handover stands (`bootvine/src/screen_components/`).
+- **`update(model, msg, now)`** applies one `Msg` and returns the `Cmd`s to
+  carry out. It reads no files, devices or clocks; the time arrives with it.
+- **`view(model)`** renders the frame, the shell summary or nothing.
+- **`subscriptions(model)`** lists the `Sub`s the model needs. After every
+  update the loop compares that list with what runs, starts what is new and
+  drops what is no longer wanted.
 
-| Input | Woken by |
-| --- | --- |
-| Boot changes | the bus socket becoming readable, or a failed unit's journal read finishing |
-| Password requests | inotify on `/run/systemd/ask-password` |
-| A prompt that is no longer awaited | the asker's pidfd becoming readable, or a timer until its `NotAfter` |
-| Another terminal brought to the front | `POLLPRI` on `/sys/class/tty/tty0/active` |
-| Resume console lent and returned | inotify on `/run/bootvine` |
-| Console log level and font | checked after each batch of boot changes, since units such as `systemd-sysctl` and `systemd-vconsole-setup` change them |
+A runtime carries out commands and turns subscriptions into streams of
+messages. The live runtime does it with syscalls and the bus; the scripted
+demos have their own runtime that plays a script through the same messages.
+A command's result comes back as a message, such as `AskShellStarting`
+answered by `ShellQueryAnswered`. ast-grep rules keep this shape: the model
+and view layers import nothing that touches the system, only a runtime
+matches on a `Cmd` or `Sub`, and messages carry no closures.
 
-Timers remain where time itself is the point: the 16 ms frame tick for spinners
-and running times, the full repaint every 5 s, the repaint every 100 ms while
-the root switches, the retry every 100 ms while PID 1 re-executes, the handover
-deadlines and call timeouts. Without inotify, password requests fall back to a
-check every 100 ms.
+Subscriptions wait on the kernel or on systemd rather than on timers:
+
+| Subscription | Present | Woken by |
+| --- | --- | --- |
+| Boot feed | always | the bus socket becoming readable, or a failed unit's journal read finishing |
+| Password requests | system scope | inotify on `/run/systemd/ask-password` |
+| Abandonment of the shown prompt | while a prompt shows | the asker's pidfd becoming readable, or a timer until its `NotAfter` |
+| Terminal switches | always | `POLLPRI` on `/sys/class/tty/tty0/active` |
+| Console writes | always | `POLLPRI` on `/dev/vcs12` |
+| Resume marker | system scope | inotify on `/run/bootvine` |
+| Frame ticks | while something animates | a 16 ms timer, for spinners and running times |
+| Deadline | while handing over or settling for a shell | a one-shot timer |
+
+The console log level and font are read after each batch of boot changes,
+since units such as `systemd-sysctl` and `systemd-vconsole-setup` change them.
+Timers remain only where time itself is the point: frame ticks, deadlines, call
+timeouts and the retry every 100 ms while PID 1 re-executes. Without inotify,
+password requests fall back to a check every 100 ms.
 
 ## systemd's private socket
 

@@ -1,0 +1,53 @@
+id: elm-shape
+language: rust
+severity: error
+message: The screen application keeps the Elm shape.
+note: update takes &mut Model and a Msg and returns Vec<Cmd>; view takes &Model; subscriptions takes &Model and returns Vec<Sub>; Cmd and Sub derive Debug and PartialEq so tests can compare them and the runtime can diff subscriptions.
+files:
+  - bootvine/src/screen_components/screen_app.rs
+rule:
+  any:
+    - kind: function_item
+      has:
+        field: name
+        regex: ^update$
+      not:
+        all:
+          - has:
+              field: parameters
+              regex: '^\(\s*\w+: &mut Model,\s*\w+: Msg\b'
+          - has:
+              field: return_type
+              regex: ^Vec<Cmd>$
+    - kind: function_item
+      has:
+        field: name
+        regex: ^subscriptions$
+      not:
+        all:
+          - has:
+              field: parameters
+              regex: '^\(\s*\w+: &Model\s*\)$'
+          - has:
+              field: return_type
+              regex: ^Vec<Sub>$
+    - kind: function_item
+      has:
+        field: name
+        regex: ^view$
+      not:
+        has:
+          field: parameters
+          regex: "^\\(\\s*\\w+: &('\\w+ )?Model\\b"
+    - kind: enum_item
+      has:
+        field: name
+        regex: ^(Cmd|Sub)$
+      not:
+        all:
+          - follows:
+              kind: attribute_item
+              regex: \bDebug\b
+          - follows:
+              kind: attribute_item
+              regex: \bPartialEq\b

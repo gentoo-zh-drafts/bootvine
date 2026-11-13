@@ -1,0 +1,8 @@
+id: messages-are-plain-data
+valid:
+  - "pub enum Msg { Boot(Vec<BootChange>), PromptAbandoned(PathBuf) }"
+  - "pub enum Other { Callback(Box<dyn Fn()>) }"
+invalid:
+  - "pub enum Cmd { Run(Box<dyn Fn()>) }"
+  - "pub enum Msg { Later(fn() -> u8) }"
+  - "pub enum Sub { Source(Box<dyn Stream<Item = Msg>>) }"

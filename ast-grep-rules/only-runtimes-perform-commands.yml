@@ -1,0 +1,24 @@
+id: only-runtimes-perform-commands
+language: rust
+severity: error
+message: Only a runtime decides what a command or subscription does.
+note: The pure update and view construct Cmd and Sub values; the live and demo runtimes match on them and carry them out.
+files:
+  - bootvine/src/**/*.rs
+  - scripted-demos/src/**/*.rs
+ignores:
+  - bootvine/src/console_session/live_runtime.rs
+  - scripted-demos/src/scripted_boot.rs
+rule:
+  any:
+    - kind: scoped_identifier
+      regex: '^(Cmd|Sub)::'
+      any:
+        - inside:
+            kind: match_pattern
+        - inside:
+            kind: tuple_struct_pattern
+    - kind: scoped_type_identifier
+      regex: '^(Cmd|Sub)::'
+      inside:
+        kind: struct_pattern
