@@ -2,8 +2,8 @@
 Description=Live dependency tree of boot jobs
 DefaultDependencies=no
 IgnoreOnIsolate=yes
-Before=display-manager.service shutdown.target
-Conflicts=shutdown.target
+Before=display-manager.service shutdown.target emergency.service rescue.service
+Conflicts=shutdown.target emergency.service rescue.service
 
 [Service]
 Type=simple

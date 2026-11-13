@@ -260,6 +260,16 @@ target being brought up, such as `poweroff.target` or `reboot.target`. It
 shows the units being stopped, nested under the units that have to stop first,
 until PID 1 hands over to `systemd-shutdown` and the connection closes.
 
+### Emergency and rescue shells
+
+`bootvine.service` also conflicts with `emergency.service` and
+`rescue.service`, so systemd stops bootvine before their shell starts. A
+failed unit in the initrd, such as a LUKS unlock that gave up, never reaches
+the switch to the real root, so bootvine would otherwise keep `tty12` in
+front. The shell then writes on `/dev/console`, which is that same terminal,
+over the tree. Stopping first switches back to the earlier terminal, and the
+shell starts there.
+
 ## The console
 
 While it runs, bootvine:
@@ -318,7 +328,7 @@ starts, it stays behind it and comes forward once the prompt is answered.
 
 | Unit | Wanted by | Notable settings |
 | --- | --- | --- |
-| `bootvine.service` | `sysinit.target` | `DefaultDependencies=no`, `IgnoreOnIsolate=yes`, `Before=display-manager.service`, process name `@bootvine` |
+| `bootvine.service` | `sysinit.target` | `DefaultDependencies=no`, `IgnoreOnIsolate=yes`, `Before=display-manager.service`, `Conflicts=shutdown.target emergency.service rescue.service`, process name `@bootvine` |
 | `bootvine-shutdown.service` | `shutdown.target` | `After=bootvine.service display-manager.service` |
 
 Both draw on `/dev/tty12` with `TTYReset=yes` and log to the journal.

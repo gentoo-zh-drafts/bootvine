@@ -13,6 +13,7 @@ let
     slow-services = "slow and failing units, a held initrd probe and a tuigreet login";
     text-console = "the slow units without a display manager, handing over at the default target";
     encrypted-volume = "a LUKS volume unlocked in the initrd with the passphrase 'sample passphrase'";
+    failed-unlock = "a LUKS volume the initrd needs, dropping to emergency mode after a wrong passphrase";
     failures = "units that fail in every way systemd reports, each with journal messages";
     hibernate-resume = "a swap disk to hibernate to, showing the kernel's image loading progress on resume";
   };

@@ -214,6 +214,7 @@ shows the shutdown.
 | `nix run .#sample-vm-slow-services` | slow units in the initrd and stage 2, one failing unit, and the handover to a tuigreet login | [booting through the initrd](#booting-through-the-initrd) |
 | `nix run .#sample-vm-text-console` | the same units without a display manager, handing over at the default target | [without a display manager](#without-a-display-manager) |
 | `nix run .#sample-vm-encrypted-volume` | a LUKS volume unlocked in the initrd; the passphrase is `sample passphrase` | [passphrase prompts](#passphrase-prompts) |
+| `nix run .#sample-vm-failed-unlock` | a LUKS volume the initrd needs; a wrong passphrase drops to emergency mode, which bootvine leaves to the shell | |
 | `nix run .#sample-vm-hibernate-resume` | a swap disk to hibernate to; run `systemctl hibernate`, then start the machine again | [resuming from hibernation](#resuming-from-hibernation) |
 | `nix run .#sample-vm-failures` | a firmware failure in the initrd, then units that exit with an error, crash, time out, cannot be run, restart too often, report a status, die after starting, and one that fails only through its dependency | [failures](#failures) |
 
