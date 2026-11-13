@@ -5,6 +5,7 @@ use std::{
 use bootvine::{
     console_session::{
         resume_console::{close_resume_console, open_resume_console},
+        saved_console_state::{restore_console_state, save_console_state},
         watch_loop::{Settings, run},
     },
     screen_settings::config_file::{
@@ -17,6 +18,8 @@ use bootvine::{
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use jiff::fmt::friendly::SpanParser;
+use tracing::warn;
+use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 #[command(
@@ -79,6 +82,16 @@ enum Command {
     OpenResumeConsole,
     #[command(about = "Undo open-resume-console when no hibernated image was restored")]
     CloseResumeConsole,
+    #[command(
+        about = "Remember the kernel console level before the viewer silences it; run as \
+                 ExecStartPre of the bootvine units"
+    )]
+    SaveConsoleState,
+    #[command(
+        about = "Restore the kernel console level and systemd's status output however the viewer \
+                 ended; run as ExecStopPost of the bootvine units"
+    )]
+    RestoreConsoleState,
 }
 
 #[derive(Args)]
@@ -114,6 +127,8 @@ fn main() -> ExitCode {
         Some(Command::Uninstall(options)) => report_outcome(uninstall_files(&options)),
         Some(Command::OpenResumeConsole) => report_outcome(open_resume_console()),
         Some(Command::CloseResumeConsole) => report_outcome(close_resume_console()),
+        Some(Command::SaveConsoleState) => report_outcome(save_console_state()),
+        Some(Command::RestoreConsoleState) => report_outcome(restore_console_state()),
         None => watch_boot(cli.watch),
     }
 }
@@ -137,13 +152,20 @@ fn render_defaults(format: DefaultsFormat) -> Result<String, Box<dyn Error>> {
 }
 
 fn watch_boot(options: WatchOptions) -> ExitCode {
+    match tracing_journald::layer() {
+        Ok(journal_layer) => tracing_subscriber::registry()
+            .with(journal_layer.with_field_prefix(None))
+            .with(LevelFilter::INFO)
+            .init(),
+        Err(error) => eprintln!("bootvine: cannot log to the journal: {error}"),
+    }
     let config = match read_config_file(&options.config) {
         Ok(config) => config,
         Err(ConfigError::Unreadable(error)) if error.kind() == ErrorKind::NotFound => {
             Config::default()
         }
         Err(error) => {
-            eprintln!("bootvine: ignoring {}: {error}", options.config.display());
+            warn!(path = %options.config.display(), error = %error, "ignoring the config file");
             Config::default()
         }
     };

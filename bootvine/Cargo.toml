@@ -64,6 +64,9 @@ tokio = { version = "1.54.0", default-features = false, features = [
   "signal",
 ] }
 toml = { version = "1.1.8", features = ["preserve_order"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-journald = "0.3.2"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 unicode-truncate = "2.0.1"
 unicode-width = "0.2.2"
 zeroize = "1.9.1"

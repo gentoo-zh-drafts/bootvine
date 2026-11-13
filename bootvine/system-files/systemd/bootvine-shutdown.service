@@ -5,7 +5,9 @@ After=bootvine.service display-manager.service
 
 [Service]
 Type=simple
+ExecStartPre=/usr/bin/bootvine save-console-state
 ExecStart=/usr/bin/bootvine --shutdown
+ExecStopPost=/usr/bin/bootvine restore-console-state
 StandardInput=tty
 StandardOutput=tty
 StandardError=journal

@@ -1,5 +1,6 @@
 use std::{
     fs::{read_dir, read_link, read_to_string},
+    io::ErrorKind,
     iter::once,
     path::{Path, PathBuf},
 };
@@ -24,7 +25,8 @@ impl BootOrigin {
     pub fn read() -> Self {
         let names = uname();
         let host = names.nodename().to_string_lossy().into_owned();
-        let command_line = read_to_string(KERNEL_COMMAND_LINE).unwrap_or_default();
+        let command_line =
+            read_to_string(KERNEL_COMMAND_LINE).expect("the kernel command line is readable");
         let system_path = init_system(&command_line);
         let system = system_path
             .and_then(|path| nixos_version(path, &host))
@@ -32,7 +34,10 @@ impl BootOrigin {
             .or_else(|| {
                 OS_RELEASES
                     .iter()
-                    .find_map(|path| read_to_string(path).ok())
+                    .find_map(|path| match read_to_string(path) {
+                        Err(error) if error.kind() == ErrorKind::NotFound => None,
+                        contents => Some(contents.expect("os-release is readable")),
+                    })
                     .and_then(|release| pretty_name(&release))
             });
         let generation =
@@ -87,16 +92,21 @@ struct SystemLink {
 }
 
 fn system_links() -> Vec<SystemLink> {
-    read_dir(SYSTEM_PROFILES)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
+    let entries = match read_dir(SYSTEM_PROFILES) {
+        Err(error) if error.kind() == ErrorKind::NotFound => return Vec::new(),
+        listed => listed.expect("the nix system profiles are listable"),
+    };
+    entries
+        .map(|entry| entry.expect("entries of the nix system profiles are readable"))
         .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .expect("nix profile names are UTF-8");
             let generation = name.strip_prefix("system-")?.strip_suffix("-link")?;
             Some(SystemLink {
                 generation: generation.to_owned(),
-                target: read_link(entry.path()).ok()?,
+                target: read_link(entry.path()).expect("system generation links are symlinks"),
             })
         })
         .collect()

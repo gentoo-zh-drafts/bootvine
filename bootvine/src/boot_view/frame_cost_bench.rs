@@ -54,7 +54,9 @@ fn report_timed_draws(label: &str, mut work: impl FnMut(Duration)) {
         .map(|draw| {
             let started = Instant::now();
             work(Duration::from_secs(90) + DRAW_SPACING * draw);
-            started.elapsed()
+            Instant::now()
+                .checked_duration_since(started)
+                .expect("the monotonic clock never runs backwards")
         })
         .collect();
     timings.sort_unstable();

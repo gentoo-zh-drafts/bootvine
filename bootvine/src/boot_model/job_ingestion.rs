@@ -145,6 +145,14 @@ impl BootState {
         }
     }
 
+    pub fn reason_failure(&mut self, unit: &str, reason: String) {
+        if let Some(failed) = self.failed.iter_mut().find(|failed| {
+            failed.unit == unit && failed.explanation == FailureExplanation::Unexplained
+        }) {
+            failed.explanation = FailureExplanation::Reasoned(reason);
+        }
+    }
+
     pub fn explain_failure(&mut self, unit: &str, cause: FailureCause) {
         if let Some(failed) = self.failed.iter_mut().find(|failed| failed.unit == unit) {
             failed.explanation = FailureExplanation::Explained(cause);
@@ -162,10 +170,7 @@ impl BootState {
     pub fn awaits_journal_lines(&self) -> bool {
         self.failed.iter().any(|failed| {
             failed.kind.has_own_cause()
-                && match &failed.explanation {
-                    FailureExplanation::Unexplained => true,
-                    FailureExplanation::Explained(cause) => cause.log_lines.is_empty(),
-                }
+                && !matches!(failed.explanation, FailureExplanation::Explained(_))
         })
     }
 
@@ -231,7 +236,7 @@ impl BootState {
         if let Some(started_at) = record
             .transition_started(job.kind)
             .filter(|started| job.kind != JobKind::Unknown && (self.origin..=at).contains(started))
-            && UnitKind::of(&record.facts.name) != UnitKind::Target
+            && UnitKind::from(record.facts.name.as_str()) != UnitKind::Target
         {
             self.finished_runs.push(FinishedRun {
                 label,
@@ -411,6 +416,8 @@ mod tests {
         assert!(!state.shell_start_queued());
         state.finish_job(4, JobResult::Failed, 2000 * MS);
         assert!(state.awaits_journal_lines());
+        state.reason_failure("nm.service", "exited with status 1".to_owned());
+        assert!(state.awaits_journal_lines());
         state.explain_failure(
             "nm.service",
             FailureCause {
@@ -418,14 +425,8 @@ mod tests {
                 log_lines: Vec::new(),
             },
         );
-        assert!(state.awaits_journal_lines());
-        state.explain_failure(
-            "nm.service",
-            FailureCause {
-                reason: "exited with status 1".to_owned(),
-                log_lines: vec!["no carrier on eth0".to_owned()],
-            },
-        );
+        assert!(!state.awaits_journal_lines());
+        state.reason_failure("nm.service", "exited with status 1".to_owned());
         assert!(!state.awaits_journal_lines());
         queue_unit(&mut state, 30, waiting("emergency.service", &[]), 2100 * MS);
         assert!(state.shell_start_queued());

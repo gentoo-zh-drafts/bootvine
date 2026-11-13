@@ -11,6 +11,11 @@ pub fn rows_within_height(forest: &[TreeNode], budget: usize) -> Vec<TreeRow> {
         .find(|rows| rows.len() <= budget)
         .unwrap_or_else(|| {
             let essential = flatten_forest(prune_to_running(forest.to_vec(), 0)).len();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "when the running units alone exceed the budget there is no spare room \
+                          for folded rows"
+            )]
             let spare = budget.saturating_sub(essential + 1);
             flatten_forest(fold_forest(prune_to_running(forest.to_vec(), spare)))
         })
@@ -62,7 +67,8 @@ impl TreeNode {
                 .then(|| &cursor.children[0])
         })
         .count()
-        .saturating_sub(1)
+        .checked_sub(1)
+        .expect("successors yields at least the starting node")
     }
 
     fn fold(mut self, may_absorb: bool) -> Self {

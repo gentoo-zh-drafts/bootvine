@@ -123,6 +123,11 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
     }
 
     #[must_use]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the epoch is a reading of the same monotonic clock taken earlier, and zero is \
+                  the right answer for the first frame"
+    )]
     pub fn now(&self) -> Duration {
         monotonic_now().saturating_sub(self.epoch)
     }
@@ -130,7 +135,12 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
     fn absorb(&mut self, input: ScreenInput) -> ControlFlow<WatchEnding> {
         let now = self.now();
         match input {
-            ScreenInput::Boot(changes) => self.apply_boot_changes(changes, now),
+            ScreenInput::Boot(changes) => {
+                let flow = self.apply_boot_changes(changes, now);
+                let refresh = self.desk.keep_console_up();
+                self.request_refresh(refresh);
+                flow
+            }
             ScreenInput::Key(event) => self.desk.press_key(&event, now),
             ScreenInput::Frame => {
                 let changes = self.desk.frame_passed(now)?;
@@ -242,6 +252,12 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "boot timestamps mix systemd samples with this process's clock reads and can \
+                  arrive out of order; showing zero keeps the boot screen up where a panic would \
+                  blank the console"
+    )]
     fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<(), Error>
     where
         Error: From<B::Error>,

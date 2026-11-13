@@ -91,14 +91,16 @@ pub enum UnitKind {
     Other,
 }
 
-impl UnitKind {
-    #[must_use]
-    pub fn of(name: &str) -> Self {
-        name.rsplit_once('.')
-            .and_then(|(_, suffix)| serde_plain::from_str(suffix).ok())
-            .unwrap_or(Self::Other)
+impl From<&str> for UnitKind {
+    fn from(name: &str) -> Self {
+        name.rsplit_once('.').map_or(Self::Other, |(_, suffix)| {
+            serde_plain::from_str(suffix)
+                .expect("unknown unit suffixes deserialize to UnitKind::Other")
+        })
     }
+}
 
+impl UnitKind {
     #[must_use]
     pub fn tag(self) -> Option<&'static str> {
         match self {
@@ -119,7 +121,7 @@ impl UnitKind {
 fn description_label(facts: &UnitFacts) -> Option<&String> {
     facts.description.as_ref().filter(|_| {
         matches!(
-            UnitKind::of(&facts.name),
+            UnitKind::from(facts.name.as_str()),
             UnitKind::Device | UnitKind::Mount | UnitKind::Swap | UnitKind::Automount
         )
     })
@@ -129,7 +131,7 @@ pub(super) fn display_label(facts: &UnitFacts) -> String {
     if let Some(description) = description_label(facts) {
         return description.clone();
     }
-    match UnitKind::of(&facts.name) {
+    match UnitKind::from(facts.name.as_str()) {
         UnitKind::Target | UnitKind::Other => facts.name.clone(),
         _ => facts
             .name
@@ -167,15 +169,15 @@ mod tests {
         assert_eq!(from_str("frozen").ok(), Some(JobResult::Failed));
         assert_eq!(from_str("stop").ok(), Some(JobKind::TakesDown));
         assert_eq!(from_str("restart").ok(), Some(JobKind::BringsUp));
-        assert_eq!(UnitKind::of("dev-sda.swap"), UnitKind::Swap);
-        assert_eq!(UnitKind::of("init.scope.d"), UnitKind::Other);
-        assert_eq!(UnitKind::of("no-suffix"), UnitKind::Other);
+        assert_eq!(UnitKind::from("dev-sda.swap"), UnitKind::Swap);
+        assert_eq!(UnitKind::from("init.scope.d"), UnitKind::Other);
+        assert_eq!(UnitKind::from("no-suffix"), UnitKind::Other);
     }
 
     #[test]
     fn kinds_with_a_tag_drop_their_suffix() {
         let socket = facts("docker.socket", &[]);
-        assert_eq!(UnitKind::of(&socket.name), UnitKind::Socket);
+        assert_eq!(UnitKind::from(socket.name.as_str()), UnitKind::Socket);
         assert_eq!(UnitKind::Socket.tag(), Some("Socket"));
         assert_eq!(display_label(&socket), "docker");
         assert_eq!(display_label(&facts("sshd.service", &[])), "sshd");

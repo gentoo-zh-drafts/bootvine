@@ -24,11 +24,18 @@ Work inside the dev shell (`direnv allow` once, with
 
 ```sh
 cargo clippy --workspace --all-targets
+ast-grep scan --error bootvine/src scripted-demos/src xtask/src
 cargo fmt --all
 ```
 
 Clippy runs with the pedantic lints and forbids absolute paths; formatting
-needs the nightly toolchain the dev shell provides.
+needs the nightly toolchain the dev shell provides. `.clippy.toml` denies
+saturating and wrapping arithmetic, `Instant::elapsed` and lossy unicode
+conversions, and `ast-grep-rules/` holds structural rules with tests in
+`ast-grep-rule-tests/` (`ast-grep test`).
+
+The viewer logs to the journal; read it with `journalctl -t bootvine`, and
+narrow it with fields such as `UNIT=foo.service` or `-p warning`.
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org).
 jj does not run git hooks, so check the commits you are about to push with:
@@ -38,9 +45,9 @@ nix run .#check-commit-messages -- origin/main..HEAD
 ```
 
 Git users can install the same commit-message check and a formatting check as
-hooks with `prek install` ([prek](https://github.com/j178/prek), from the dev
+hooks, plus the ast-grep rules, with `prek install` ([prek](https://github.com/j178/prek), from the dev
 shell) or `pre-commit install` ([pre-commit](https://pre-commit.com)). CI runs
-the formatting hook with `nix run .#run-pre-commit-hooks`.
+the formatting and ast-grep hooks with `nix run .#run-pre-commit-hooks`.
 
 ## Continuous integration
 

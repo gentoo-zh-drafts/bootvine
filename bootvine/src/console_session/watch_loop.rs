@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Write},
+    io::{self, ErrorKind, Write},
     path::Path,
     pin::{Pin, pin},
     time::Duration,
@@ -11,18 +11,19 @@ use crossterm::{
     style::ResetColor,
     terminal::{Clear, ClearType, size},
 };
-use futures::{Stream, StreamExt, stream};
+use futures::{Stream, StreamExt, channel::mpsc, stream};
 use ratatui::backend::CrosstermBackend;
 use tokio::{runtime::Builder, time::timeout};
+use tracing::info;
 
 use crate::{
     boot_model::{BootState, Phase, boot_origin::BootOrigin},
     console_session::{
-        ask_password::RequestWatch,
+        ask_password::watch_requests,
         live_desk::{LiveDesk, password_request_inputs},
         stream_sources::{
             BACKGROUND_CHECK_INTERVAL, frame_inputs, key_inputs, periodic_inputs,
-            termination_inputs,
+            resume_marker_inputs, terminal_switch_inputs, termination_inputs,
         },
         watch_screen::{
             ConsoleDesk, ScreenInput, WatchEnding, WatchScreen, overwrite_every_cell,
@@ -67,11 +68,20 @@ async fn settle_failures_before_shell<Desk: ConsoleDesk>(
 
 fn print_shell_handover_summary<Desk: ConsoleDesk>(screen: &WatchScreen<Desk>) -> io::Result<()> {
     let (columns, rows) = size()?;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a terminal shorter than the rows kept for the shell gets a summary of zero rows"
+    )]
     let summary = screen.shell_handover_summary(columns, rows.saturating_sub(ROWS_LEFT_FOR_SHELL));
     let mut console = io::stdout();
     execute!(console, Clear(ClearType::All), MoveTo(0, 0))?;
     overwrite_every_cell(&mut CrosstermBackend::new(io::stdout()), &summary)?;
-    execute!(console, ResetColor, MoveTo(0, summary.area.height + 1), Show)?;
+    execute!(
+        console,
+        ResetColor,
+        MoveTo(0, summary.area.height + 1),
+        Show
+    )?;
     console.flush()
 }
 
@@ -94,7 +104,7 @@ fn starting_phase(settings: &Settings) -> Phase {
 
 pub fn run(settings: &Settings) -> Result<(), Error> {
     if boot_already_finished(settings) {
-        eprintln!("bootvine: boot already finished, leaving the console alone");
+        info!("boot already finished, leaving the console alone");
         return Ok(());
     }
     Builder::new_current_thread()
@@ -112,14 +122,25 @@ async fn watch_live_boot(settings: &Settings, phase: Phase) -> Result<(), Error>
 }
 
 async fn watch_on_console(settings: &Settings, phase: Phase) -> Result<StatusRelease, Error> {
-    let for_system = settings.scope == Scope::System;
-    let requests = RequestWatch::open();
-    let prompt_check: fn() -> ScreenInput = if requests.is_some() {
-        || ScreenInput::PromptCheck
-    } else {
-        || ScreenInput::PasswordRequests
+    let requests = match watch_requests() {
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => {
+            info!("not allowed to watch password prompts, polling for them instead");
+            None
+        }
+        watched => Some(watched?),
     };
-    let desk = LiveDesk::take_console(for_system);
+    let (prompt_check_sender, prompt_check_receiver) = mpsc::unbounded();
+    let prompt_inputs = if requests.is_some() {
+        prompt_check_receiver
+            .map(|()| ScreenInput::PromptCheck)
+            .left_stream()
+    } else {
+        periodic_inputs(BACKGROUND_CHECK_INTERVAL, || ScreenInput::PasswordRequests).right_stream()
+    };
+    let desk = LiveDesk::take_console(
+        settings.scope,
+        requests.is_some().then_some(prompt_check_sender),
+    );
     let password_inputs = requests.map(password_request_inputs).transpose()?;
     let event_inputs = stream::select(
         stream::select(
@@ -132,12 +153,9 @@ async fn watch_on_console(settings: &Settings, phase: Phase) -> Result<StatusRel
         ),
     );
     let timer_inputs = stream::select(
+        stream::select(frame_inputs(), prompt_inputs),
         stream::select(
-            frame_inputs(),
-            periodic_inputs(BACKGROUND_CHECK_INTERVAL, prompt_check),
-        ),
-        stream::select(
-            periodic_inputs(BACKGROUND_CHECK_INTERVAL, || ScreenInput::ConsoleUpkeep),
+            stream::select(terminal_switch_inputs(), resume_marker_inputs()),
             periodic_inputs(FULL_REPAINT_INTERVAL, || ScreenInput::FullRepaint),
         ),
     );
@@ -161,7 +179,7 @@ async fn watch_on_console(settings: &Settings, phase: Phase) -> Result<StatusRel
         WatchEnding::BootCompleted => Ok(StatusRelease::AfterBoot),
         WatchEnding::ViewerLeft => Ok(StatusRelease::Immediately),
         WatchEnding::ShellTookOver => {
-            eprintln!("bootvine: a shell is starting, leaving the failures above it");
+            info!("a shell is starting, leaving the failures above it");
             print_shell_handover_summary(&screen)?;
             screen.desk.stay_in_front();
             Ok(StatusRelease::Immediately)

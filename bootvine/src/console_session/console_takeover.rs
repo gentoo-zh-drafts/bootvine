@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs, mem, ptr};
+use std::{collections::HashSet, fs, io, mem, os::fd::BorrowedFd, ptr};
 
 use rustix::{
     io::Errno,
@@ -6,6 +6,7 @@ use rustix::{
     stdio::stdin,
     termios::ttyname,
 };
+use tracing::{info, warn};
 
 use crate::{
     console_session::{
@@ -19,35 +20,112 @@ const GIO_UNIMAP: Opcode = 0x4B66;
 const VT_GETSTATE: Opcode = 0x5603;
 const VT_ACTIVATE: Opcode = 0x5606;
 const VIRTUAL_TERMINAL_PREFIX: &str = "/dev/tty";
-const KERNEL_PRINTK: &str = "/proc/sys/kernel/printk";
+pub(crate) const KERNEL_PRINTK: &str = "/proc/sys/kernel/printk";
 const ALERTS_ONLY: &str = "1";
 const HIGHEST_LOW_GLYPH: u16 = 255;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StdinTerminal {
+    VirtualConsole(u16),
+    OtherTerminal,
+    NotATerminal,
+}
+
+impl TryFrom<BorrowedFd<'_>> for StdinTerminal {
+    type Error = Errno;
+
+    fn try_from(terminal: BorrowedFd<'_>) -> Result<Self, Errno> {
+        let device = match ttyname(terminal, Vec::new()) {
+            Err(Errno::NOTTY) => return Ok(Self::NotATerminal),
+            named => named?,
+        };
+        let device = device.to_str().expect("terminal device names are ASCII");
+        let Some(digits) = device
+            .strip_prefix(VIRTUAL_TERMINAL_PREFIX)
+            .filter(|digits| {
+                !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        else {
+            return Ok(Self::OtherTerminal);
+        };
+        Ok(
+            match digits
+                .parse()
+                .expect("virtual console numbers fit in sixteen bits")
+            {
+                0 => Self::OtherTerminal,
+                number => Self::VirtualConsole(number),
+            },
+        )
+    }
+}
 
 pub(super) struct QuietKernelConsole {
     previous_level: String,
 }
 
-fn console_level() -> Option<String> {
-    let levels = fs::read_to_string(KERNEL_PRINTK).ok()?;
-    levels.split_whitespace().next().map(ToOwned::to_owned)
+pub(super) enum KernelConsole {
+    Quieted(QuietKernelConsole),
+    LeftAsIs,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum KernelLoudness {
+    Unchanged,
+    QuietedAgain,
+}
+
+pub(crate) fn console_level() -> io::Result<String> {
+    let levels = fs::read_to_string(KERNEL_PRINTK)?;
+    Ok(levels
+        .split_whitespace()
+        .next()
+        .expect("printk lists the console log levels")
+        .to_owned())
 }
 
 impl QuietKernelConsole {
-    pub(super) fn take() -> Option<Self> {
+    fn take() -> io::Result<Self> {
         let previous_level = console_level()?;
-        fs::write(KERNEL_PRINTK, ALERTS_ONLY).ok()?;
-        Some(Self { previous_level })
+        fs::write(KERNEL_PRINTK, ALERTS_ONLY)?;
+        Ok(Self { previous_level })
     }
 
-    pub(super) fn keep_quiet(&mut self) -> bool {
-        let Some(level) = console_level() else {
-            return false;
-        };
-        if level == ALERTS_ONLY || fs::write(KERNEL_PRINTK, ALERTS_ONLY).is_err() {
-            return false;
+    fn keep_quiet(&mut self) -> KernelLoudness {
+        let level = console_level().expect("printk stays readable once bootvine quieted it");
+        if level == ALERTS_ONLY {
+            return KernelLoudness::Unchanged;
         }
+        fs::write(KERNEL_PRINTK, ALERTS_ONLY)
+            .expect("printk stays writable once bootvine quieted it");
         self.previous_level = level;
-        true
+        KernelLoudness::QuietedAgain
+    }
+}
+
+impl KernelConsole {
+    pub(super) fn quiet() -> Self {
+        match QuietKernelConsole::take() {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Self::LeftAsIs,
+            taken => {
+                Self::Quieted(taken.expect("the kernel console level is readable and writable"))
+            }
+        }
+    }
+
+    pub(super) fn keep_quiet(&mut self) -> KernelLoudness {
+        match self {
+            Self::Quieted(quiet) => quiet.keep_quiet(),
+            Self::LeftAsIs => KernelLoudness::Unchanged,
+        }
+    }
+}
+
+impl Drop for QuietKernelConsole {
+    fn drop(&mut self) {
+        if let Err(error) = fs::write(KERNEL_PRINTK, &self.previous_level) {
+            warn!(error = %error, level = %self.previous_level, "could not restore the kernel console level");
+        }
     }
 }
 
@@ -56,24 +134,33 @@ struct LoadedFont {
     uses_high_glyphs: bool,
 }
 
-pub(super) fn console_look(own_vt: Option<u16>) -> ConsoleLook {
-    let font = loaded_font();
-    let glyphs = font.as_ref().map_or_else(Glyphs::default, |font| {
-        Glyphs::fitting(|symbol| symbol.is_ascii() || font.characters.contains(&symbol))
-    });
-    let palette = match own_vt {
-        None => ConsolePalette::Terminal,
-        Some(_) if font.as_ref().is_some_and(|font| font.uses_high_glyphs) => {
-            ConsolePalette::EightColorVt
-        }
-        Some(_) => ConsolePalette::SixteenColorVt,
-    };
-    ConsoleLook { glyphs, palette }
+enum ConsoleFont {
+    Mapped(LoadedFont),
+    Unmapped,
 }
 
-impl Drop for QuietKernelConsole {
-    fn drop(&mut self) {
-        let _ = fs::write(KERNEL_PRINTK, &self.previous_level);
+pub(super) fn console_look(terminal: StdinTerminal) -> ConsoleLook {
+    let StdinTerminal::VirtualConsole(_) = terminal else {
+        return ConsoleLook {
+            glyphs: Glyphs::default(),
+            palette: ConsolePalette::Terminal,
+        };
+    };
+    match loaded_font().expect("the font of bootvine's own virtual console is readable") {
+        ConsoleFont::Mapped(font) => ConsoleLook {
+            glyphs: Glyphs::fitting(|symbol| {
+                symbol.is_ascii() || font.characters.contains(&symbol)
+            }),
+            palette: if font.uses_high_glyphs {
+                ConsolePalette::EightColorVt
+            } else {
+                ConsolePalette::SixteenColorVt
+            },
+        },
+        ConsoleFont::Unmapped => ConsoleLook {
+            glyphs: Glyphs::default(),
+            palette: ConsolePalette::SixteenColorVt,
+        },
     }
 }
 
@@ -94,23 +181,26 @@ fn read_unicode_map(map: &mut UnicodeMap) -> Result<(), Errno> {
     unsafe { ioctl(stdin(), Updater::<GIO_UNIMAP, UnicodeMap>::new(map)) }
 }
 
-fn loaded_font() -> Option<LoadedFont> {
+fn loaded_font() -> Result<ConsoleFont, Errno> {
     let mut probe = UnicodeMap {
         count: 0,
         pairs: ptr::null_mut(),
     };
-    let _ = read_unicode_map(&mut probe);
+    match read_unicode_map(&mut probe) {
+        Ok(()) | Err(Errno::NOMEM) => {}
+        Err(error) => return Err(error),
+    }
     if probe.count == 0 {
-        return None;
+        return Ok(ConsoleFont::Unmapped);
     }
     let mut pairs = vec![UnicodePair::default(); usize::from(probe.count)];
     let mut map = UnicodeMap {
         count: probe.count,
         pairs: pairs.as_mut_ptr(),
     };
-    read_unicode_map(&mut map).ok()?;
+    read_unicode_map(&mut map)?;
     let mapped = &pairs[..usize::from(map.count).min(pairs.len())];
-    Some(LoadedFont {
+    Ok(ConsoleFont::Mapped(LoadedFont {
         characters: mapped
             .iter()
             .filter_map(|pair| char::from_u32(u32::from(pair.unicode)))
@@ -118,7 +208,7 @@ fn loaded_font() -> Option<LoadedFont> {
         uses_high_glyphs: mapped
             .iter()
             .any(|pair| pair.font_position > HIGHEST_LOW_GLYPH),
-    })
+    }))
 }
 
 #[repr(C)]
@@ -133,50 +223,79 @@ pub(super) struct ForegroundVt {
     previous: u16,
 }
 
-fn active_vt() -> Option<u16> {
-    let state: VtState = unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }.ok()?;
-    Some(state.active)
+pub(super) enum Foreground {
+    Holding(ForegroundVt),
+    StayingBehind,
 }
 
-pub(super) fn vt_of_stdin() -> Option<u16> {
-    let name = ttyname(stdin(), Vec::new()).ok()?;
-    name.to_str()
-        .ok()?
-        .strip_prefix(VIRTUAL_TERMINAL_PREFIX)?
-        .parse()
-        .ok()
-        .filter(|number| *number > 0)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum VtOwnership {
+    StillOurs,
+    TakenAway,
+}
+
+fn active_vt() -> Result<u16, Errno> {
+    let state: VtState = unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }?;
+    Ok(state.active)
 }
 
 impl ForegroundVt {
-    pub(super) fn take(own: u16) -> Option<Self> {
+    fn take(own: u16) -> Result<Self, Errno> {
         let previous = active_vt()?;
         if previous != own {
-            activate(own).ok()?;
+            activate(own)?;
         }
-        Some(Self { own, previous })
+        Ok(Self { own, previous })
     }
 
-    pub(super) fn insist(&self) -> bool {
-        self.taken_away() && activate(self.own).is_ok()
+    pub(super) fn ownership(&self) -> VtOwnership {
+        if active_vt().expect("bootvine's own virtual console answers VT_GETSTATE") == self.own {
+            VtOwnership::StillOurs
+        } else {
+            VtOwnership::TakenAway
+        }
     }
 
-    pub(super) fn taken_away(&self) -> bool {
-        active_vt().is_some_and(|active| active != self.own)
+    pub(super) fn insist(&self) -> VtOwnership {
+        let ownership = self.ownership();
+        if ownership == VtOwnership::TakenAway {
+            activate(self.own).expect("bootvine switched to its own virtual console before");
+        }
+        ownership
     }
 
-    pub(super) fn stay_switched(self) {
+    fn stay_switched(self) {
         mem::forget(self);
+    }
+}
+
+impl Foreground {
+    pub(super) fn take(terminal: StdinTerminal) -> Self {
+        let StdinTerminal::VirtualConsole(own) = terminal else {
+            return Self::StayingBehind;
+        };
+        match ForegroundVt::take(own) {
+            Err(Errno::PERM | Errno::ACCESS) => Self::StayingBehind,
+            taken => Self::Holding(taken.expect("bootvine can switch to its own virtual console")),
+        }
+    }
+
+    pub(super) fn stay_switched(&mut self) {
+        if let Self::Holding(foreground) = mem::replace(self, Self::StayingBehind) {
+            foreground.stay_switched();
+        }
     }
 }
 
 impl Drop for ForegroundVt {
     fn drop(&mut self) {
         if ask_password::requested() {
-            eprintln!("bootvine: leaving a password prompt to the console agent on this terminal");
+            info!("leaving a password prompt to the console agent on this terminal");
             return;
         }
-        let _ = activate(self.previous);
+        if let Err(error) = activate(self.previous) {
+            warn!(error = %error, vt = self.previous, "could not switch back to the previous virtual console");
+        }
     }
 }
 

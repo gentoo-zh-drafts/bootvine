@@ -49,10 +49,13 @@ retry(lambda _: unit_state("bootvine") == "inactive", timeout_seconds=60)
 
 journal = bootvine_journal()
 print(journal)
-watched = [line for line in journal.splitlines() if line.startswith("bootvine: watching")]
-assert any(" in Initrd " in line for line in watched), "never ran in the initrd"
-assert any(" in Stage 2 " in line for line in watched), "never reconnected after the root switch"
-pids = {line.split(" as pid ")[1].split()[0] for line in watched}
+assert bootvine_watched("Initrd"), "never ran in the initrd"
+assert bootvine_watched("Stage 2"), "never reconnected after the root switch"
+pids = set(
+    machine.succeed(
+        "journalctl -b -u bootvine MESSAGE='watching the boot' -o cat --output-fields=PID"
+    ).split()
+)
 assert len(pids) == 1, f"the initrd process did not survive the root switch: {pids}"
 assert "handing the console over" in journal, "never handed the console over"
 

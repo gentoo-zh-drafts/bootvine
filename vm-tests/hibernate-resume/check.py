@@ -48,5 +48,5 @@ machine.fail("test -e /run/test/sentinel")
 assert_console_returned()
 journal = bootvine_journal()
 print(journal)
-assert " in Initrd " in journal, "bootvine did not run in the initrd of the boot without an image"
+assert bootvine_watched("Initrd"), "bootvine did not run in the initrd of the boot without an image"
 machine.succeed('test "$(systemctl show -p Result --value bootvine)" = success')

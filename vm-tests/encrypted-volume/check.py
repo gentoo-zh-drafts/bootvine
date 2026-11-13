@@ -28,6 +28,6 @@ machine.wait_for_unit("multi-user.target")
 machine.succeed("test -e /dev/mapper/secret")
 journal = bootvine_journal()
 print(journal)
-assert " in Initrd " in journal, "never ran in the initrd"
+assert bootvine_watched("Initrd"), "never ran in the initrd"
 assert journal.count("answered a password prompt") == 2, "did not answer both attempts itself"
 recording.stop()

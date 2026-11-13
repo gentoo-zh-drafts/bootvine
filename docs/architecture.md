@@ -173,16 +173,22 @@ sequenceDiagram
     PID1-->>Bootvine: ActiveState=failed, or JobRemoved failed/timeout
     Bootvine->>PID1: GetUnit, Properties.GetAll on the unit type
     PID1->>Bootvine: Result, ExecMainCode, ExecMainStatus, StatusText
-    Note over Bootvine: wait 200 ms for journald, longer while nothing is there yet
+    Note over Bootvine: reason in the failure panel at once
     Bootvine->>Journal: sd_journal, matching the unit in this boot
     Journal->>Bootvine: last messages, newest last
-    Note over Bootvine: reason and lines in the failure panel
+    Note over Bootvine: until PID 1's own line about the failure is there, sd_journal_wait, at most 1 s
+    Note over Bootvine: lines in the failure panel
 ```
 
 - **The reason** comes from the unit type's `Result` (`exit-code`, `signal`,
   `timeout`, `start-limit-hit`, `oom-kill`, …), with the exit status or signal
   of the main process, and the service's `StatusText` when it set one. These
   are read when the unit fails, since they change at that moment.
+- **Timing**: the journal lines are read without holding up the bus: the failure and
+  its reason reach the screen first. PID 1 logs its own "Failed with result…"
+  or "Failed to start…" line once the unit's process has exited, so bootvine
+  takes that line's presence as the sign that the unit's own lines are in, and
+  until then waits for the journal to grow with `sd_journal_wait`.
 - **The journal lines** match the unit the same way `journalctl -u` does
   (`_SYSTEMD_UNIT=` or `UNIT=`, in the current boot), without PID 1's own
   "Starting…", "Failed with result…" and "Failed to start…" lines, which the
@@ -349,6 +355,23 @@ timer, password prompts and termination each produce a stream of inputs; the
 streams are merged, applied in batches to a single screen state, and the screen
 is drawn once per batch. The live boot and the scripted demos share this loop
 and differ only in where their inputs come from.
+
+Inputs wait on the kernel or on systemd rather than on timers:
+
+| Input | Woken by |
+| --- | --- |
+| Boot changes | the bus socket becoming readable, or a failed unit's journal read finishing |
+| Password requests | inotify on `/run/systemd/ask-password` |
+| A prompt that is no longer awaited | the asker's pidfd becoming readable, or a timer until its `NotAfter` |
+| Another terminal brought to the front | `POLLPRI` on `/sys/class/tty/tty0/active` |
+| Resume console lent and returned | inotify on `/run/bootvine` |
+| Console log level and font | checked after each batch of boot changes, since units such as `systemd-sysctl` and `systemd-vconsole-setup` change them |
+
+Timers remain where time itself is the point: the 16 ms frame tick for spinners
+and running times, the full repaint every 5 s, the repaint every 100 ms while
+the root switches, the retry every 100 ms while PID 1 re-executes, the handover
+deadlines and call timeouts. Without inotify, password requests fall back to a
+check every 100 ms.
 
 ## systemd's private socket
 

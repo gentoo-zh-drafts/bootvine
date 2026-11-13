@@ -22,6 +22,10 @@ pub enum BootChange {
         result: JobResult,
         at: Duration,
     },
+    ReasonFailure {
+        unit: String,
+        reason: String,
+    },
     ExplainFailure {
         unit: String,
         cause: FailureCause,
@@ -46,6 +50,7 @@ impl BootState {
             BootChange::UpdateActivity { unit, activity } => self.update_activity(&unit, activity),
             BootChange::QueueJob { id, unit, kind, at } => self.queue_job(id, &unit, kind, at),
             BootChange::FinishJob { id, result, at } => self.finish_job(id, result, at),
+            BootChange::ReasonFailure { unit, reason } => self.reason_failure(&unit, reason),
             BootChange::ExplainFailure { unit, cause } => self.explain_failure(&unit, cause),
             BootChange::SetRoot(root) => self.set_root(root),
             BootChange::SetHandoff(unit) => {

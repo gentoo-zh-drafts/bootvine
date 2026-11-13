@@ -14,6 +14,7 @@ let
         (craneLib.fileset.commonCargoSources ../.)
         ../bootvine/system-files
         ../.rustfmt.toml
+        ../.clippy.toml
       ];
     };
     strictDeps = true;

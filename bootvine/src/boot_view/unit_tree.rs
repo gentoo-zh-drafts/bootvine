@@ -100,6 +100,11 @@ fn solved_columns(width: u16, shows_annotations: bool, shows_timeout: bool) -> C
 }
 
 impl UnitTree<'_> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a tree taller than the terminal is cut by layout anyway, so the height caps at \
+                  u16::MAX"
+    )]
     pub fn height_of(rows: usize, hidden: usize) -> u16 {
         u16::try_from(rows + usize::from(hidden > 0))
             .unwrap_or(u16::MAX)
@@ -137,7 +142,17 @@ impl UnitTree<'_> {
         else {
             return None;
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "boot timestamps mix systemd samples with this process's clock reads and can \
+                      arrive out of order; showing zero keeps the boot screen up where a panic \
+                      would blank the console"
+        )]
         let elapsed = self.now.saturating_sub(since);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a deadline at or before the start leaves no time limit to show"
+        )]
         let limit = deadline.saturating_sub(since);
         (elapsed >= SHOW_TIMEOUT_AFTER).then_some(RunTimeout {
             limit,
@@ -250,8 +265,19 @@ impl UnitTree<'_> {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "boot timestamps mix systemd samples with this process's clock reads and can \
+                  arrive out of order; showing zero keeps the boot screen up where a panic would \
+                  blank the console"
+    )]
     fn row(&self, row: &TreeRow, stage: Stage, prefix: String, columns: &Columns) -> Row<'static> {
         let marker = self.status_marker(row, stage);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "when the prefix and marker fill the label column there is no room left for \
+                      the label"
+        )]
         let room = usize::from(columns.label).saturating_sub(prefix.width() + marker.width());
         let annotation = |text: &str, width: u16| {
             if row.chain.is_empty() {
@@ -310,6 +336,11 @@ impl Columns {
 }
 
 impl Widget for UnitTree<'_> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an area shorter than the header, or than one row plus the overflow note, shows \
+                  no unit rows"
+    )]
     fn render(self, area: Rect, buf: &mut Buffer) {
         let capacity = usize::from(area.height.saturating_sub(TEXT_ROW_HEIGHT));
         let shown = if usize::from(self.height() - TEXT_ROW_HEIGHT) > capacity {

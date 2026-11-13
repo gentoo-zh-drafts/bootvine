@@ -64,6 +64,7 @@ pub struct FailureCause {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FailureExplanation {
     Unexplained,
+    Reasoned(String),
     Explained(FailureCause),
 }
 

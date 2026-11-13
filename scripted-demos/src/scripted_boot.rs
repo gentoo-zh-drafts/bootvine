@@ -400,7 +400,11 @@ impl ConsoleDesk for DemoDesk {
             return ControlFlow::Continue(changes);
         }
         let settled_at = *self.settled_at.get_or_insert(now);
-        if now.saturating_sub(settled_at) >= FINAL_FRAME {
+        if now
+            .checked_sub(settled_at)
+            .expect("frame times only move forward")
+            >= FINAL_FRAME
+        {
             ControlFlow::Break(WatchEnding::BootCompleted)
         } else {
             ControlFlow::Continue(changes)

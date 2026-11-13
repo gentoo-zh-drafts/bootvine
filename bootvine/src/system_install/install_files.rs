@@ -55,7 +55,7 @@ pub struct InstallTarget {
         default_value = "/usr",
         help = "Prefix for bin/bootvine and lib/systemd/system"
     )]
-    prefix: PathBuf,
+    prefix: String,
     #[arg(
         long,
         help = "Stage the files under this directory instead of /; skips sudo and systemctl"
@@ -113,16 +113,18 @@ impl InstallTarget {
         self.changes_live_system() && !geteuid().is_root()
     }
 
-    fn binary_path(&self) -> PathBuf {
-        self.prefix.join("bin/bootvine")
+    fn binary_path(&self) -> String {
+        format!("{}/bin/bootvine", self.prefix.trim_end_matches('/'))
     }
 
     fn unit_path(&self, unit: &str) -> PathBuf {
-        self.prefix.join("lib/systemd/system").join(unit)
+        Path::new(&self.prefix)
+            .join("lib/systemd/system")
+            .join(unit)
     }
 
     fn every_installed_path(&self) -> Vec<PathBuf> {
-        once(self.binary_path())
+        once(PathBuf::from(self.binary_path()))
             .chain(unit_files(self).map(|file| file.destination))
             .chain(
                 INITRD_GENERATORS
@@ -167,7 +169,7 @@ fn running_binary() -> Result<PathBuf, InstallError> {
 
 fn binary_file(target: &InstallTarget) -> Result<Option<InstalledFile>, InstallError> {
     let running = running_binary()?;
-    let destination = target.binary_path();
+    let destination = PathBuf::from(target.binary_path());
     if fs::canonicalize(target.staged(&destination)).is_ok_and(|resolved| resolved == running) {
         return Ok(None);
     }
@@ -191,7 +193,7 @@ fn unit_files(target: &InstallTarget) -> impl Iterator<Item = InstalledFile> {
             destination: target.unit_path(unit.name),
             contents: unit
                 .contents
-                .replace(PACKAGED_BINARY_PATH, &binary_path.to_string_lossy())
+                .replace(PACKAGED_BINARY_PATH, &binary_path)
                 .into_bytes(),
             mode: 0o644,
         })
@@ -249,7 +251,7 @@ fn remove_if_present(path: PathBuf) -> Result<(), InstallError> {
 }
 
 fn run_command(command: &mut Command) -> Result<(), InstallError> {
-    let program = command.get_program().to_string_lossy().into_owned();
+    let program = command.get_program().display().to_string();
     let status = command.status().map_err(|source| InstallError::Spawn {
         program: program.clone(),
         source,

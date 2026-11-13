@@ -53,6 +53,11 @@ impl BootState {
             .scan(start, |cursor, target| {
                 Some(self.milestone_reached_at(target).map(|reached_at| {
                     let upto = succeeded.partition_point(|at| *at <= reached_at);
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "a milestone listed after one it was reached before has no units \
+                                  of its own left, so it counts zero"
+                    )]
                     let row = MilestoneRow {
                         label: target.clone(),
                         finished_units: upto.saturating_sub(cursor.consumed),

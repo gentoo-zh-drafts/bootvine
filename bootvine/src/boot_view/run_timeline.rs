@@ -75,6 +75,11 @@ pub fn timeline_fits(area: Rect) -> bool {
 }
 
 impl Timeline<'_> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a timeline taller than the terminal is cut by layout anyway, so the height caps \
+                  at u16::MAX"
+    )]
     pub fn height(&self) -> u16 {
         let entries = self.milestones.len()
             + self.finished.len().min(SLOWEST_RUNS_SHOWN)
@@ -85,6 +90,11 @@ impl Timeline<'_> {
         RULED_ROW_HEIGHT.saturating_add(u16::try_from(entries).unwrap_or(u16::MAX))
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an area shorter than the ruler, or filled by milestones and running units, \
+                  leaves no rows for finished runs"
+    )]
     fn finished_that_fit(&self, height: u16) -> Vec<&FinishedRun> {
         let bar_rows = usize::from(height.saturating_sub(RULED_ROW_HEIGHT));
         let room = bar_rows.saturating_sub(self.milestones.len() + self.running.len());
@@ -209,6 +219,10 @@ impl Widget for Timeline<'_> {
         )
         .render(entry_labels_area, buf);
         let axis = TimeAxis::new(self.origin, self.now, bar_area.width);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "an empty bar area still places labels on the first row"
+        )]
         let label_row = f64::from(bar_area.height.saturating_sub(1).max(1));
         let axis_color = self.colors.axis;
         Canvas::default()
@@ -282,6 +296,12 @@ struct TimeAxis {
 
 impl TimeAxis {
     fn new(origin: Duration, now: Duration, width: u16) -> Self {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "boot timestamps mix systemd samples with this process's clock reads and can \
+                      arrive out of order; showing zero keeps the boot screen up where a panic \
+                      would blank the console"
+        )]
         let elapsed = now.saturating_sub(origin).max(AXIS_STEPS[0]);
         let max_labels = u128::from((width / ANNOTATION_COLUMN_WIDTH).max(1));
         let step = AXIS_STEPS
@@ -305,13 +325,25 @@ impl TimeAxis {
     }
 
     fn eighths_into_column(&self, at: Duration) -> usize {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a zero-width axis still maps every instant onto its first column"
+        )]
         let last_column = u128::from(self.width.saturating_sub(1).max(1));
         let span = self.span.as_nanos().max(1);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a run that started before the axis origin is drawn from the first column"
+        )]
         let scaled = at.saturating_sub(self.origin).as_nanos() * last_column;
         usize::try_from(scaled % span * 8 / span).unwrap_or_default()
     }
 
     fn columns_to_seconds(&self, columns: usize) -> f64 {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a zero-width axis still maps every instant onto its first column"
+        )]
         let last_column = self.width.saturating_sub(1).max(1);
         let columns = u16::try_from(columns).unwrap_or(last_column);
         self.span.as_secs_f64() * f64::from(columns) / f64::from(last_column)

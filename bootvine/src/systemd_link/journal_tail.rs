@@ -1,10 +1,15 @@
-use std::{io, str::Chars};
+use std::{
+    io,
+    str::Chars,
+    time::{Duration, Instant},
+};
 
 use systemd::{
     id128::Id128,
     journal::{Journal, OpenOptions},
 };
 use tokio::task::spawn_blocking;
+use tracing::warn;
 
 const UNIT_FIELDS: [&str; 4] = ["_SYSTEMD_UNIT", "UNIT", "_SYSTEMD_USER_UNIT", "USER_UNIT"];
 const MANAGER_SUMMARY_MESSAGE_IDS: [&str; 10] = [
@@ -22,37 +27,62 @@ const MANAGER_SUMMARY_MESSAGE_IDS: [&str; 10] = [
 const ENTRIES_SCANNED: usize = 200;
 const ESCAPE: char = '\u{1b}';
 
-pub async fn recent_unit_messages(unit: String, wanted: usize) -> Vec<String> {
+struct UnitMessages {
+    oldest_first: Vec<String>,
+    manager_reported: bool,
+}
+
+pub async fn settled_unit_messages(unit: String, wanted: usize, patience: Duration) -> Vec<String> {
     spawn_blocking(move || {
-        read_recent_messages(&unit, wanted).unwrap_or_else(|error| {
-            eprintln!("bootvine: reading the journal of {unit}: {error}");
+        read_settled_messages(&unit, wanted, Instant::now() + patience).unwrap_or_else(|error| {
+            warn!(unit = %unit, error = %error, "could not read the journal of the unit");
             Vec::new()
         })
     })
     .await
-    .unwrap_or_default()
+    .expect("reading the journal does not panic")
 }
 
-fn read_recent_messages(unit: &str, wanted: usize) -> io::Result<Vec<String>> {
+fn read_settled_messages(unit: &str, wanted: usize, deadline: Instant) -> io::Result<Vec<String>> {
     let mut journal = OpenOptions::default().open()?;
     match_unit_in_this_boot(&mut journal, unit)?;
+    loop {
+        let messages = scan_newest_messages(&mut journal, wanted)?;
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero());
+        match remaining {
+            Some(left) if !messages.manager_reported => {
+                journal.wait(Some(left))?;
+            }
+            _ => return Ok(messages.oldest_first),
+        }
+    }
+}
+
+fn scan_newest_messages(journal: &mut Journal, wanted: usize) -> io::Result<UnitMessages> {
     journal.seek_tail()?;
     let mut newest_first = Vec::new();
+    let mut manager_reported = false;
     let mut scanned = 0;
     while newest_first.len() < wanted
         && scanned < ENTRIES_SCANNED
         && journal.previous().is_ok_and(|moved| moved > 0)
     {
         scanned += 1;
-        if is_manager_summary(&mut journal).unwrap_or(true) {
+        if is_manager_summary(journal).unwrap_or(true) {
+            manager_reported = true;
             continue;
         }
-        if let Ok(Some(message)) = entry_message(&mut journal) {
+        if let Ok(Some(message)) = entry_message(journal) {
             newest_first.push(message);
         }
     }
     newest_first.reverse();
-    Ok(newest_first)
+    Ok(UnitMessages {
+        oldest_first: newest_first,
+        manager_reported,
+    })
 }
 
 fn match_unit_in_this_boot(journal: &mut Journal, unit: &str) -> io::Result<()> {
@@ -66,6 +96,11 @@ fn match_unit_in_this_boot(journal: &mut Journal, unit: &str) -> io::Result<()> 
     Ok(())
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "journal fields may hold arbitrary bytes and are only shown on screen, so a \
+              replacement character beats dropping the message"
+)]
 fn field_text(journal: &mut Journal, field: &str) -> io::Result<Option<String>> {
     Ok(journal.get_data(field)?.and_then(|entry_field| {
         entry_field
@@ -117,7 +152,7 @@ mod tests {
     fn journal_of_this_boot_has_lines_for_journald() {
         let unit = env::var("BOOTVINE_JOURNAL_UNIT")
             .unwrap_or_else(|_| "systemd-journald.service".to_owned());
-        let lines = read_recent_messages(&unit, 6).expect("readable journal");
+        let lines = read_settled_messages(&unit, 6, Instant::now()).expect("readable journal");
         lines.iter().for_each(|line| println!("{line}"));
         assert!(!lines.is_empty());
     }

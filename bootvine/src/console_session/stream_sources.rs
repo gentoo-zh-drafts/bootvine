@@ -1,17 +1,133 @@
-use std::{future::Future, io, iter, os::fd::AsRawFd, time::Duration};
+use std::{
+    fs::{self, File},
+    future::Future,
+    io::{self, Read, Seek, SeekFrom},
+    iter,
+    os::fd::{AsRawFd, OwnedFd, RawFd},
+    time::Duration,
+};
 
 use crossterm::event::{self, Event};
-use futures::{FutureExt, Stream, StreamExt, stream};
+use futures::{FutureExt, Stream, StreamExt, future::ready, stream};
+use rustix::{
+    fs::inotify::{self, CreateFlags, WatchFlags},
+    io::{Errno, read},
+};
 use tokio::{
     io::{Interest, unix::AsyncFd},
     signal::unix::{SignalKind, signal},
     time::{Interval, MissedTickBehavior, interval, timeout},
 };
+use tracing::info;
 
-use crate::console_session::watch_screen::ScreenInput;
+use crate::console_session::{resume_console::RESUME_CONSOLE_DIRECTORY, watch_screen::ScreenInput};
 
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 pub const BACKGROUND_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+const INOTIFY_BUFFER: usize = 4096;
+const FOREGROUND_TERMINAL_STATE: &str = "/sys/class/tty/tty0/active";
+
+pub struct DirectoryWatch {
+    inotify: OwnedFd,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectoryChange {
+    Changed,
+    Unchanged,
+}
+
+impl DirectoryWatch {
+    pub fn open(directory: &str) -> io::Result<Self> {
+        fs::create_dir_all(directory)?;
+        let inotify = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK)?;
+        inotify::add_watch(
+            &inotify,
+            directory,
+            WatchFlags::CLOSE_WRITE
+                | WatchFlags::MOVED_TO
+                | WatchFlags::MOVED_FROM
+                | WatchFlags::DELETE
+                | WatchFlags::ONLYDIR,
+        )?;
+        Ok(Self { inotify })
+    }
+
+    #[must_use]
+    pub fn changed(&self) -> DirectoryChange {
+        let mut events = [0_u8; INOTIFY_BUFFER];
+        let drained_reads = iter::from_fn(|| match read(&self.inotify, &mut events) {
+            Ok(0) | Err(Errno::AGAIN) => None,
+            Ok(read_bytes) => Some(read_bytes),
+            Err(error) => panic!("reading inotify events failed: {error}"),
+        })
+        .count();
+        if drained_reads > 0 {
+            DirectoryChange::Changed
+        } else {
+            DirectoryChange::Unchanged
+        }
+    }
+}
+
+impl AsRawFd for DirectoryWatch {
+    fn as_raw_fd(&self) -> RawFd {
+        self.inotify.as_raw_fd()
+    }
+}
+
+fn rearm_attribute(attribute: &mut File) -> io::Result<()> {
+    attribute.seek(SeekFrom::Start(0))?;
+    attribute.read_to_end(&mut Vec::new())?;
+    Ok(())
+}
+
+fn watched_foreground_terminal() -> io::Result<AsyncFd<File>> {
+    let mut attribute = File::open(FOREGROUND_TERMINAL_STATE)?;
+    rearm_attribute(&mut attribute)?;
+    Ok(unsafe { AsyncFd::register_with_interest(attribute, Interest::PRIORITY) }?)
+}
+
+pub fn terminal_switch_inputs() -> impl Stream<Item = ScreenInput> {
+    let watched = match watched_foreground_terminal() {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            info!("the kernel has no virtual consoles, not following console switches");
+            return stream::pending().right_stream();
+        }
+        opened => opened.expect("the foreground console attribute is readable"),
+    };
+    stream::unfold(watched, |mut watched| async move {
+        {
+            let mut readiness = watched
+                .ready_mut(Interest::PRIORITY)
+                .await
+                .expect("the runtime keeps polling the foreground console attribute");
+            readiness.clear_ready();
+            rearm_attribute(readiness.get_inner_mut())
+                .expect("the foreground console attribute stays readable");
+        }
+        Some((ScreenInput::ConsoleUpkeep, watched))
+    })
+    .left_stream()
+}
+
+pub fn resume_marker_inputs() -> impl Stream<Item = ScreenInput> {
+    let watch = match DirectoryWatch::open(RESUME_CONSOLE_DIRECTORY) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            info!(
+                path = RESUME_CONSOLE_DIRECTORY,
+                "not allowed to watch for the resume console"
+            );
+            return stream::pending().right_stream();
+        }
+        opened => opened.expect("the resume console directory can be watched"),
+    };
+    items_when_readable(watch, DirectoryWatch::changed)
+        .expect("the runtime accepts an inotify descriptor")
+        .filter(|change| ready(*change == DirectoryChange::Changed))
+        .map(|_| ScreenInput::ConsoleUpkeep)
+        .left_stream()
+}
 
 pub struct CarriedItem<Item, State> {
     pub item: Item,
@@ -42,17 +158,18 @@ pub fn items_when_readable<Source: AsRawFd, Item>(
     let readiness = readable_source(source)?;
     Ok(stream::poll_fn(move |context| {
         readiness.poll_read_ready(context).map(|ready| {
-            ready.ok().map(|mut guard| {
-                guard.clear_ready();
-                read(readiness.get_ref())
-            })
+            let mut guard = ready.expect("the runtime keeps polling a registered descriptor");
+            guard.clear_ready();
+            Some(read(readiness.get_ref()))
         })
     }))
 }
 
 pub async fn readable_or_timeout<Source: AsRawFd>(readiness: &AsyncFd<Source>, patience: Duration) {
-    if let Ok(Ok(mut guard)) = timeout(patience, readiness.readable()).await {
-        guard.clear_ready();
+    if let Ok(ready) = timeout(patience, readiness.readable()).await {
+        ready
+            .expect("the runtime keeps polling a registered descriptor")
+            .clear_ready();
     }
 }
 

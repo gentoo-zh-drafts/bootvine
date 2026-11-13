@@ -40,5 +40,13 @@ in
     lib.mapAttrs (
       machineName: machine:
       pkgs.testers.runNixOSTest (import ./${machineName}/check.nix { inherit machine pkgs; })
-    ) machines;
+    ) machines
+    // {
+      crash-recovery = pkgs.testers.runNixOSTest (
+        import ./crash-recovery/check.nix {
+          machine = machines.encrypted-volume;
+          inherit pkgs;
+        }
+      );
+    };
 }

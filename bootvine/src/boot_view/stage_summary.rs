@@ -42,6 +42,12 @@ impl Stages<'_> {
         u16::try_from(self.state.finished_stages.len()).unwrap_or(u16::MAX)
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "boot timestamps mix systemd samples with this process's clock reads and can \
+                  arrive out of order; showing zero keeps the boot screen up where a panic would \
+                  blank the console"
+    )]
     fn conclusion(&self) -> Option<Conclusion<'_>> {
         if let Some(exited_at) = self.state.manager_exited_at {
             return Some(Conclusion {
@@ -60,6 +66,11 @@ impl Stages<'_> {
         })
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a stage's start and the moment it was reached are separate systemd timestamps; \
+                  a reordered pair shows as zero"
+    )]
     fn finished_phases(&self) -> impl Iterator<Item = Line<'static>> + '_ {
         self.state.finished_stages.iter().map(|stage| {
             Line::from(vec![
@@ -109,6 +120,12 @@ impl Stages<'_> {
             .finished_stages
             .last()
             .map_or(self.state.origin, |stage| stage.reached_at);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "boot timestamps mix systemd samples with this process's clock reads and can \
+                      arrive out of order; showing zero keeps the boot screen up where a panic \
+                      would blank the console"
+        )]
         let elapsed = ELAPSED.unsigned_duration_to_string(&self.now.saturating_sub(started_at));
         Line::from(vec![
             LAST_BRANCH.fg(self.colors.branches),

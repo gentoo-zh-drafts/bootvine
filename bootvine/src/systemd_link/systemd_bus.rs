@@ -46,6 +46,8 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(1);
 const UNLIMITED: Duration = Duration::from_micros(u64::MAX);
 const STATUS_SILENT_MODE: &str = "no";
 const STATUS_RESET_MODE: &str = "";
+const NO_SUCH_UNIT: &str = "org.freedesktop.systemd1.NoSuchUnit";
+const UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -86,6 +88,16 @@ pub struct FetchedUnit {
     pub path: Path<'static>,
     pub facts: UnitFacts,
     pub activity: Activity,
+}
+
+pub enum UnitLookup {
+    Loaded(Box<FetchedUnit>),
+    NotLoaded,
+}
+
+enum BusMessage {
+    Signal(Signal),
+    Unrelated,
 }
 
 pub struct JobListing {
@@ -183,9 +195,7 @@ pub async fn restore_status_after_watch(
     if !matches!(watched, Ok(StatusRelease::Immediately)) {
         select(pin!(terminated), pin!(boot_finish_or_lost_connection())).await;
     }
-    if let Ok(session) = Session::open(Scope::System) {
-        session.restore_configured_status().ok();
-    }
+    Session::open(Scope::System)?.restore_configured_status()?;
     watched.map(drop)
 }
 
@@ -225,7 +235,7 @@ impl Session {
         Ok(self.channel.send_with_reply_and_block(call, CALL_TIMEOUT)?)
     }
 
-    fn restore_configured_status(&self) -> Result<(), Error> {
+    pub fn restore_configured_status(&self) -> Result<(), Error> {
         self.blocking_call(manager_call("SetShowStatus", (STATUS_RESET_MODE,))?)?;
         Ok(())
     }
@@ -290,7 +300,14 @@ impl BusConnection {
             .into_iter()
             .partition(|message| message.msg_type() == MessageType::Signal);
         self.early_signals
-            .extend(signals.iter().filter_map(parse_signal));
+            .extend(
+                signals
+                    .iter()
+                    .filter_map(|message| match parse_signal(message) {
+                        BusMessage::Signal(signal) => Some(signal),
+                        BusMessage::Unrelated => None,
+                    }),
+            );
         if session.channel.is_connected() {
             Ok(replies)
         } else {
@@ -360,40 +377,52 @@ impl BusConnection {
     }
 
     pub async fn job_kind(&mut self, job: &Path<'_>) -> Result<JobKind, Error> {
-        let reply = self
+        let reply = match self
             .call(property_call(job, JOB_INTERFACE, "JobType")?)
-            .await?;
+            .await
+        {
+            Err(Error::Bus(bus_error)) if bus_error.name() == Some(UNKNOWN_OBJECT) => {
+                return Ok(JobKind::Unknown);
+            }
+            answered => answered?,
+        };
         let kind: Variant<String> = reply.read1()?;
-        Ok(serde_plain::from_str(&kind.0).unwrap_or(JobKind::Unknown))
+        Ok(serde_plain::from_str(&kind.0)
+            .expect("unknown job types deserialize to the fallback variant"))
     }
 
-    pub async fn fetch_unit(&mut self, name: &str) -> Result<FetchedUnit, Error> {
-        let path: Path<'static> = self
-            .call(manager_call("GetUnit", (name,))?)
-            .await?
-            .read1()?;
+    pub async fn fetch_unit(&mut self, name: &str) -> Result<UnitLookup, Error> {
+        let path: Path<'static> = match self.call(manager_call("GetUnit", (name,))?).await {
+            Err(Error::Bus(bus_error)) if bus_error.name() == Some(NO_SUCH_UNIT) => {
+                return Ok(UnitLookup::NotLoaded);
+            }
+            answered => answered?.read1()?,
+        };
         let properties = self.all_properties(&path, UNIT_INTERFACE).await?;
-        let kind_properties = match kind_interface(UnitKind::of(&unit_id(name, &properties))) {
-            Some(interface) => self.all_properties(&path, interface).await?,
-            None => PropMap::new(),
-        };
-        Ok(FetchedUnit {
+        let kind_properties =
+            match kind_interface(UnitKind::from(unit_id(name, &properties).as_str())) {
+                Some(interface) => self.all_properties(&path, interface).await?,
+                None => PropMap::new(),
+            };
+        Ok(UnitLookup::Loaded(Box::new(FetchedUnit {
             facts: unit_facts_from(name, &properties, &kind_properties),
-            activity: activity_from(&properties),
+            activity: Activity::from(&properties),
             path,
-        })
+        })))
     }
 
-    pub async fn failure_reason(&mut self, name: &str) -> Result<Option<String>, Error> {
-        let Some(interface) = kind_interface(UnitKind::of(name)) else {
-            return Ok(None);
+    pub async fn failure_reason(&mut self, name: &str) -> Result<FailureReason, Error> {
+        let Some(interface) = kind_interface(UnitKind::from(name)) else {
+            return Ok(FailureReason::Unexplained);
         };
-        let path: Path<'static> = self
-            .call(manager_call("GetUnit", (name,))?)
-            .await?
-            .read1()?;
+        let path: Path<'static> = match self.call(manager_call("GetUnit", (name,))?).await {
+            Err(Error::Bus(bus_error)) if bus_error.name() == Some(NO_SUCH_UNIT) => {
+                return Ok(FailureReason::Unexplained);
+            }
+            answered => answered?.read1()?,
+        };
         let properties = self.all_properties(&path, interface).await?;
-        Ok(failure_reason_from(&properties))
+        Ok(FailureReason::from(&properties))
     }
 
     async fn all_properties(&mut self, path: &Path<'_>, interface: &str) -> Result<PropMap, Error> {
@@ -409,14 +438,21 @@ impl BusConnection {
             .read1()?)
     }
 
-    pub async fn receive_signals(&mut self, patience: Duration) -> SignalBatch {
-        if self.early_signals.is_empty() {
-            readable_or_timeout(&self.session, patience).await;
+    pub async fn wait_for_signals(&self, patience: Option<Duration>) {
+        if !self.early_signals.is_empty() {
+            return;
         }
-        self.take_signals()
+        match patience {
+            Some(patience) => readable_or_timeout(&self.session, patience).await,
+            None => {
+                if let Ok(mut readiness) = self.session.readable().await {
+                    readiness.clear_ready();
+                }
+            }
+        }
     }
 
-    fn take_signals(&mut self) -> SignalBatch {
+    pub fn take_signals(&mut self) -> SignalBatch {
         let still_connected = self.drain_replies().is_ok();
         let signals = mem::take(&mut self.early_signals);
         if still_connected {
@@ -477,30 +513,41 @@ fn signal_name(number: i64) -> String {
     name.to_owned()
 }
 
-fn failure_reason_from(properties: &PropMap) -> Option<String> {
-    let result = text_property(properties, "Result").filter(|result| result != "success")?;
-    let status = properties
-        .get("ExecMainStatus")
-        .and_then(|value| value.0.as_i64());
-    let reason = match (result.as_str(), status) {
-        ("exit-code", Some(status)) if status != 0 => format!("exited with status {status}"),
-        ("exit-code", _) => "exited with an error".to_owned(),
-        ("signal", Some(signal)) => format!("killed by {}", signal_name(signal)),
-        ("core-dump", Some(signal)) => format!("dumped core on {}", signal_name(signal)),
-        ("timeout", _) => "timed out".to_owned(),
-        ("watchdog", _) => "stopped answering the watchdog".to_owned(),
-        ("start-limit-hit", _) => "restarted too often".to_owned(),
-        ("oom-kill", _) => "killed for running out of memory".to_owned(),
-        ("resources", _) => "could not set up its resources".to_owned(),
-        ("protocol", _) => "broke the start-up protocol".to_owned(),
-        (other, _) => other.to_owned(),
-    };
-    Some(
-        match text_property(properties, "StatusText").filter(|text| !text.is_empty()) {
-            Some(status_text) => format!("{reason}: {status_text}"),
-            None => reason,
-        },
-    )
+#[derive(Debug, PartialEq, Eq)]
+pub enum FailureReason {
+    Explained(String),
+    Unexplained,
+}
+
+impl From<&PropMap> for FailureReason {
+    fn from(properties: &PropMap) -> Self {
+        let Some(result) = text_property(properties, "Result").filter(|result| result != "success")
+        else {
+            return Self::Unexplained;
+        };
+        let status = properties
+            .get("ExecMainStatus")
+            .and_then(|value| value.0.as_i64());
+        let reason = match (result.as_str(), status) {
+            ("exit-code", Some(status)) if status != 0 => format!("exited with status {status}"),
+            ("exit-code", _) => "exited with an error".to_owned(),
+            ("signal", Some(signal)) => format!("killed by {}", signal_name(signal)),
+            ("core-dump", Some(signal)) => format!("dumped core on {}", signal_name(signal)),
+            ("timeout", _) => "timed out".to_owned(),
+            ("watchdog", _) => "stopped answering the watchdog".to_owned(),
+            ("start-limit-hit", _) => "restarted too often".to_owned(),
+            ("oom-kill", _) => "killed for running out of memory".to_owned(),
+            ("resources", _) => "could not set up its resources".to_owned(),
+            ("protocol", _) => "broke the start-up protocol".to_owned(),
+            (other, _) => other.to_owned(),
+        };
+        Self::Explained(
+            match text_property(properties, "StatusText").filter(|text| !text.is_empty()) {
+                Some(status_text) => format!("{reason}: {status_text}"),
+                None => reason,
+            },
+        )
+    }
 }
 
 fn unit_id(name: &str, properties: &PropMap) -> String {
@@ -554,7 +601,7 @@ fn unit_facts_from(name: &str, properties: &PropMap, kind_properties: &PropMap) 
     };
     let id = unit_id(name, properties);
     UnitFacts {
-        timeouts: timeouts_from(UnitKind::of(&id), properties, kind_properties),
+        timeouts: timeouts_from(UnitKind::from(id.as_str()), properties, kind_properties),
         name: id,
         description: text("Description").filter(|description| !description.is_empty()),
         after: names("After"),
@@ -580,67 +627,74 @@ fn authentication_carrier() -> Result<Message, Error> {
     Ok(ping)
 }
 
-fn parse_signal(message: &Message) -> Option<Signal> {
-    if message.msg_type() != MessageType::Signal {
-        return None;
-    }
-    let interface = message.interface()?;
-    let member = message.member()?;
+fn parse_signal(message: &Message) -> BusMessage {
+    let (MessageType::Signal, Some(interface), Some(member), Some(path)) = (
+        message.msg_type(),
+        message.interface(),
+        message.member(),
+        message.path(),
+    ) else {
+        return BusMessage::Unrelated;
+    };
     match (&*interface, &*member) {
-        (MANAGER_INTERFACE, "JobNew" | "JobRemoved") => parse_job_signal(message, &member),
-        (MANAGER_INTERFACE, "StartupFinished") => Some(Signal::BootFinished),
-        (PROPERTIES_INTERFACE, "PropertiesChanged") => parse_unit_change(message),
-        _ => None,
-    }
-}
-
-fn parse_job_signal(message: &Message, member: &str) -> Option<Signal> {
-    match member {
-        "JobNew" => {
-            let (id, job, unit): (u32, Path<'static>, String) = message.read3().ok()?;
-            Some(Signal::JobNew { id, job, unit })
+        (MANAGER_INTERFACE, "JobNew") => {
+            let (id, job, unit): (u32, Path<'static>, String) = message
+                .read3()
+                .expect("systemd sends JobNew with an id, a job path and a unit name");
+            BusMessage::Signal(Signal::JobNew { id, job, unit })
         }
-        "JobRemoved" => {
+        (MANAGER_INTERFACE, "JobRemoved") => {
             let (id, _job, unit, result): (u32, Path<'static>, String, String) =
-                message.read4().ok()?;
-            Some(Signal::JobRemoved {
+                message.read4().expect(
+                    "systemd sends JobRemoved with an id, a job path, a unit name and a result",
+                );
+            BusMessage::Signal(Signal::JobRemoved {
                 id,
                 unit,
-                result: serde_plain::from_str(&result).unwrap_or(JobResult::Failed),
+                result: serde_plain::from_str(&result)
+                    .expect("unknown job results deserialize to the fallback variant"),
             })
         }
-        _ => None,
+        (MANAGER_INTERFACE, "StartupFinished") => BusMessage::Signal(Signal::BootFinished),
+        (PROPERTIES_INTERFACE, "PropertiesChanged") => {
+            let (changed_interface, changed, _invalidated): (String, PropMap, Vec<String>) =
+                message.read3().expect(
+                    "PropertiesChanged carries an interface, changed and invalidated properties",
+                );
+            if changed_interface == UNIT_INTERFACE {
+                BusMessage::Signal(Signal::UnitChanged {
+                    path: path.into_static(),
+                    activity: Activity::from(&changed),
+                })
+            } else {
+                BusMessage::Unrelated
+            }
+        }
+        _ => BusMessage::Unrelated,
     }
 }
 
-fn parse_unit_change(message: &Message) -> Option<Signal> {
-    let (changed_interface, changed, _invalidated): (String, PropMap, Vec<String>) =
-        message.read3().ok()?;
-    if changed_interface != UNIT_INTERFACE {
-        return None;
-    }
-    Some(Signal::UnitChanged {
-        path: message.path()?.into_static(),
-        activity: activity_from(&changed),
-    })
-}
-
-fn activity_from(properties: &PropMap) -> Activity {
-    let monotonic = |property: &str| {
-        properties
-            .get(property)
-            .and_then(|value| value.0.as_u64())
-            .filter(|micros| *micros != 0)
-            .map(Duration::from_micros)
-    };
-    Activity {
-        state: properties
-            .get("ActiveState")
-            .and_then(|value| value.0.as_str())
-            .and_then(|raw| serde_plain::from_str(raw).ok()),
-        inactive_exit: monotonic("InactiveExitTimestampMonotonic"),
-        active_enter: monotonic("ActiveEnterTimestampMonotonic"),
-        active_exit: monotonic("ActiveExitTimestampMonotonic"),
+impl From<&PropMap> for Activity {
+    fn from(properties: &PropMap) -> Self {
+        let monotonic = |property: &str| {
+            properties
+                .get(property)
+                .and_then(|value| value.0.as_u64())
+                .filter(|micros| *micros != 0)
+                .map(Duration::from_micros)
+        };
+        Activity {
+            state: properties
+                .get("ActiveState")
+                .and_then(|value| value.0.as_str())
+                .map(|raw| {
+                    serde_plain::from_str(raw)
+                        .expect("unknown active states deserialize to the fallback variant")
+                }),
+            inactive_exit: monotonic("InactiveExitTimestampMonotonic"),
+            active_enter: monotonic("ActiveEnterTimestampMonotonic"),
+            active_exit: monotonic("ActiveExitTimestampMonotonic"),
+        }
     }
 }
 
@@ -659,7 +713,7 @@ mod tests {
         .append3(0_u64, 0_u64, 0_u64);
         assert!(matches!(
             parse_signal(&startup_finished),
-            Some(Signal::BootFinished)
+            BusMessage::Signal(Signal::BootFinished)
         ));
     }
 
@@ -709,29 +763,28 @@ mod tests {
     #[test]
     fn exit_codes_and_signals_become_a_reason() {
         assert_eq!(
-            failure_reason_from(&reason_properties("exit-code", 1, "")).as_deref(),
-            Some("exited with status 1")
+            FailureReason::from(&reason_properties("exit-code", 1, "")),
+            FailureReason::Explained("exited with status 1".to_owned())
         );
         assert_eq!(
-            failure_reason_from(&reason_properties("signal", 11, "")).as_deref(),
-            Some("killed by SIGSEGV")
+            FailureReason::from(&reason_properties("signal", 11, "")),
+            FailureReason::Explained("killed by SIGSEGV".to_owned())
         );
     }
 
     #[test]
     fn status_text_follows_the_reason() {
         assert_eq!(
-            failure_reason_from(&reason_properties("timeout", 0, "waiting for the disk"))
-                .as_deref(),
-            Some("timed out: waiting for the disk")
+            FailureReason::from(&reason_properties("timeout", 0, "waiting for the disk")),
+            FailureReason::Explained("timed out: waiting for the disk".to_owned())
         );
     }
 
     #[test]
     fn success_has_no_reason() {
         assert_eq!(
-            failure_reason_from(&reason_properties("success", 0, "")),
-            None
+            FailureReason::from(&reason_properties("success", 0, "")),
+            FailureReason::Unexplained
         );
     }
 

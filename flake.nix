@@ -122,7 +122,10 @@
           ciTaskApps = import ./nix/ci-tasks.nix {
             inherit pkgs mkApp;
             cargoToolchain = rustToolchain;
-            preCommitInputs = [ rustToolchain ];
+            preCommitInputs = [
+              rustToolchain
+              pkgs.ast-grep
+            ];
             extraReleaseInputs = [
               pkgs.pkg-config
               pkgs.stdenv.cc
@@ -184,6 +187,7 @@
             packages = [
               pkgs.prek
               pkgs.convco
+              pkgs.ast-grep
               pkgs.release-plz
               pkgs.git-cliff
             ];

@@ -23,6 +23,7 @@ use rustix::termios::tcgetwinsize;
 
 use crate::console_session::{stream_sources::FRAME_INTERVAL, watch_screen::overwrite_every_cell};
 
+pub const RESUME_CONSOLE_DIRECTORY: &str = "/run/bootvine";
 pub const RESUME_CONSOLE_MARKER: &str = "/run/bootvine/resume-console-open";
 const BOOTVINE_TERMINAL: &str = "/dev/tty12";
 const KERNEL_PRINTK: &str = "/proc/sys/kernel/printk";

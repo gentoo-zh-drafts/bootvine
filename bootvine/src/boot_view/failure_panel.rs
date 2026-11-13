@@ -14,7 +14,7 @@ use super::{
     screen_spacing::{TEXT_GAP, TEXT_INDENT, TEXT_ROW_HEIGHT},
 };
 use crate::{
-    boot_model::{FailedUnit, FailureExplanation},
+    boot_model::{FailedUnit, FailureCause, FailureExplanation},
     screen_settings::{color_scheme::FailureColors, font_glyphs::Glyphs},
 };
 
@@ -27,11 +27,16 @@ pub struct FailurePanel<'a> {
 fn log_lines(failed: &FailedUnit) -> &[String] {
     match &failed.explanation {
         FailureExplanation::Explained(cause) => &cause.log_lines,
-        FailureExplanation::Unexplained => &[],
+        FailureExplanation::Unexplained | FailureExplanation::Reasoned(_) => &[],
     }
 }
 
 impl FailurePanel<'_> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a panel taller than the terminal is cut by layout anyway, so the height caps at \
+                  u16::MAX"
+    )]
     pub fn height(&self) -> u16 {
         if self.newest_first.is_empty() {
             return 0;
@@ -46,12 +51,24 @@ impl FailurePanel<'_> {
 
     fn headline(&self, failed: &FailedUnit, width: usize) -> Line<'static> {
         let marker = format!("{} ", self.glyphs.failed);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a terminal narrower than the marker leaves no room for the label, which \
+                      fit_width renders as nothing"
+        )]
         let label_room = width.saturating_sub(marker.width());
         let label = fit_width(&failed.label, label_room, self.glyphs.ellipsis);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "when the label fills the line there is no room left for the reason"
+        )]
         let reason_room = label_room.saturating_sub(label.width() + TEXT_GAP.width());
         let reason = match &failed.explanation {
-            FailureExplanation::Explained(cause) if reason_room > 0 => {
-                fit_width(&cause.reason, reason_room, self.glyphs.ellipsis)
+            FailureExplanation::Explained(FailureCause { reason, .. })
+            | FailureExplanation::Reasoned(reason)
+                if reason_room > 0 =>
+            {
+                fit_width(reason, reason_room, self.glyphs.ellipsis)
             }
             _ => String::new(),
         };
@@ -69,6 +86,10 @@ impl FailurePanel<'_> {
     }
 
     fn block(&self, failed: &FailedUnit, width: usize) -> Vec<Line<'static>> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a terminal narrower than the indent leaves no room for log lines"
+        )]
         let log_room = width.saturating_sub(TEXT_INDENT.width());
         once(self.headline(failed, width))
             .chain(log_lines(failed).iter().map(|line| {

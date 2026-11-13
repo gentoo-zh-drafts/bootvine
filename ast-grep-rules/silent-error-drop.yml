@@ -1,0 +1,24 @@
+id: silent-error-drop
+language: rust
+severity: error
+message: Turning a Result into an Option drops its error silently.
+note: Pass the error on with ?; when absence is the contract, log the error first with inspect_err; expect when failure is impossible.
+files:
+  - bootvine/src/**/*.rs
+  - scripted-demos/src/**/*.rs
+  - xtask/src/**/*.rs
+rule:
+  any:
+    - all:
+        - pattern: $RESULT.ok()
+        - not:
+            pattern: $LOGGED.inspect_err($$$).ok()
+    - kind: scoped_identifier
+      regex: ^Result::ok$
+  not:
+    inside:
+      kind: mod_item
+      has:
+        field: name
+        regex: ^tests$
+      stopBy: end

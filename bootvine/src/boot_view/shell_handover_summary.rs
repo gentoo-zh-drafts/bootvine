@@ -45,6 +45,12 @@ impl ShellHandoverSummary<'_> {
 }
 
 impl Widget for ShellHandoverSummary<'_> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "boot timestamps mix systemd samples with this process's clock reads and can \
+                  arrive out of order; showing zero keeps the boot screen up where a panic would \
+                  blank the console"
+    )]
     fn render(self, area: Rect, buf: &mut Buffer) {
         let stages = self.stages();
         let failure_panel = failures_with_own_cause(self.state, self.colors, self.glyphs);

@@ -96,6 +96,11 @@ fn failures_with_own_cause<'a>(
 }
 
 impl BootView<'_> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a run's start and finish are separate systemd timestamps; a reordered pair \
+                  counts as an instant run instead of crashing the boot screen"
+    )]
     fn timeline<'a>(&'a self, rows: &'a [TreeRow]) -> Timeline<'a> {
         let mut running: Vec<RunningRun> = rows
             .iter()
@@ -139,6 +144,12 @@ impl BootView<'_> {
 }
 
 impl Widget for BootView<'_> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "boot timestamps mix systemd samples with this process's clock reads and can \
+                  arrive out of order; showing zero keeps the boot screen up where a panic would \
+                  blank the console"
+    )]
     fn render(self, area: Rect, buf: &mut Buffer) {
         let forest = &self.projection.forest;
         let all_rows = flatten_forest(forest.clone());
@@ -178,6 +189,10 @@ impl Widget for BootView<'_> {
                 0
             },
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a tree area shorter than its header row has no room for rows"
+        )]
         let budget = usize::from(heights.tree.saturating_sub(TEXT_ROW_HEIGHT));
         let rows = rows_within_height(forest, budget);
         let tree = UnitTree {
@@ -226,6 +241,11 @@ struct Heights {
 }
 
 impl Heights {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "each panel gets whatever height is left after the ones before it, which is zero \
+                  once the terminal is full"
+    )]
     fn share(free: u16, tree_need: u16, failures_need: u16, timeline_need: u16) -> Self {
         let reserved = PANEL_MINIMUM_HEIGHT
             .min(failures_need)
@@ -259,6 +279,10 @@ pub struct BootProjection {
 }
 
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "early in boot, before the keep window has passed, every finished unit is still kept"
+)]
 pub fn project_boot(state: &BootState, timing: &Timing, now: Duration) -> BootProjection {
     BootProjection {
         forest: state.waiting_forest(now.saturating_sub(timing.keep_finished_units_for)),
@@ -281,6 +305,10 @@ fn fit_width(text: &str, room: usize, ellipsis: &str) -> String {
     if text.width() <= room {
         return text.to_owned();
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a column narrower than the ellipsis keeps no characters before it"
+    )]
     let (kept, _) = text.unicode_truncate(room.saturating_sub(ellipsis.width()));
     format!("{kept}{ellipsis}")
 }

@@ -7,7 +7,9 @@ Conflicts=shutdown.target emergency.service rescue.service
 
 [Service]
 Type=simple
+ExecStartPre=/usr/bin/bootvine save-console-state
 ExecStart=@/usr/bin/bootvine @bootvine
+ExecStopPost=/usr/bin/bootvine restore-console-state
 StandardInput=tty
 StandardOutput=tty
 StandardError=journal

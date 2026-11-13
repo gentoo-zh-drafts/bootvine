@@ -171,7 +171,7 @@ impl BootState {
             depth: 0,
             label: display_label(&record.facts),
             description: summary(&record.facts),
-            kind: UnitKind::of(&record.facts.name),
+            kind: UnitKind::from(record.facts.name.as_str()),
             status: record.row_status(),
             chain: Vec::new(),
         };

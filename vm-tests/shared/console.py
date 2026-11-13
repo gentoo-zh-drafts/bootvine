@@ -68,3 +68,7 @@ def assert_bootvine_in_front():
 
 def bootvine_journal():
     return machine.succeed("journalctl -b -u bootvine -o cat")
+
+
+def bootvine_watched(phase):
+    return "watching the boot" in machine.succeed(f"journalctl -b -u bootvine 'PHASE={phase}' -o cat")
