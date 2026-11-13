@@ -1,8 +1,10 @@
 # bootvine
 
-A live tree of systemd jobs on the boot console, in the spirit of
+A live tree of service manager jobs on the console, for
+[systemd](https://systemd.io) and [OpenRC](https://github.com/OpenRC/openrc),
+in the spirit of
 [nix-output-monitor](https://github.com/maralorn/nix-output-monitor). It
-replaces the scrolling kernel and systemd lines with the units still pending
+replaces the scrolling kernel and service lines with the units still pending
 and, in the room the tree leaves, a timeline of the slowest ones that ran.
 
 I started bootvine out of frustration with the boot screen of most Linux
@@ -11,11 +13,13 @@ gave me any idea of what was going on.
 
 <img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
 
-It also follows shutdowns, answers passphrase prompts such as a
-[LUKS](https://gitlab.com/cryptsetup/cryptsetup) unlock in place, and shows why
-a unit failed with its last journal lines. The
+Under systemd it follows the boot, a resume from hibernation and the
+shutdown; under OpenRC, the boot. It answers passphrase prompts such as a
+[LUKS](https://gitlab.com/cryptsetup/cryptsetup) unlock and shows why a unit
+failed. The
 [guide](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/guide.md)
-walks through each part of the screen.
+lists what each service manager covers and walks through each part of the
+screen.
 
 ## Requirements
 

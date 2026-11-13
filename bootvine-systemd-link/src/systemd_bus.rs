@@ -263,6 +263,11 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) fn silence_status_now(&self) -> Result<(), LinkFailure> {
+        self.blocking_call(manager_call("SetShowStatus", (STATUS_SILENT_MODE,))?)?;
+        Ok(())
+    }
+
     fn send(&self, call: Message) -> Result<u32, LinkFailure> {
         let serial = self
             .channel

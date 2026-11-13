@@ -266,6 +266,19 @@ target being brought up, such as `poweroff.target` or `reboot.target`. It
 shows the units being stopped, nested under the units that have to stop first,
 until PID 1 hands over to `systemd-shutdown` and the connection closes.
 
+systemd runs every stop job before a start job, so other units start stopping
+while bootvine is still starting, and systemd prints their status lines on the
+terminal in front. The unit therefore keeps that window short:
+
+- it is not ordered after the display manager, so it starts with the first
+  stop jobs instead of after the display manager has stopped;
+- its `ExecStartPre=bootvine take-shutdown-console` switches to `tty12` and
+  silences systemd's status output before the viewer even starts. Any status
+  line printed before that lands on `tty12`, where the first frame covers it.
+
+If the display manager switches terminals while it stops, it is no longer
+running, so bootvine takes the console back.
+
 ### Emergency and rescue shells
 
 `bootvine.service` also conflicts with `emergency.service` and
@@ -351,7 +364,7 @@ starts, it stays behind it and comes forward once the prompt is answered.
 | Unit | Wanted by | Notable settings |
 | --- | --- | --- |
 | `bootvine.service` | `sysinit.target` | `DefaultDependencies=no`, `IgnoreOnIsolate=yes`, `Before=display-manager.service`, `Conflicts=shutdown.target emergency.service rescue.service`, process name `@bootvine` |
-| `bootvine-shutdown.service` | `shutdown.target` | `After=bootvine.service display-manager.service` |
+| `bootvine-shutdown.service` | `shutdown.target` | `After=bootvine.service` |
 
 Both draw on `/dev/tty12` with `TTYReset=yes` and log to the journal.
 

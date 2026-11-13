@@ -138,3 +138,28 @@ def bootvine_journal():
 
 def bootvine_watched(phase):
     return "watching the boot" in machine.succeed(f"journalctl -b -u bootvine 'PHASE={phase}' -o cat")
+
+
+def terminal_text(terminal_name):
+    terminal_number = terminal_name.removeprefix("tty")
+    return machine.succeed(f"tr -cd '[:print:]' < /dev/vcs{terminal_number}")
+
+
+def foreground_console_text():
+    return terminal_text(foreground_terminal())
+
+
+def wipe_terminal(terminal_name):
+    machine.succeed(f"printf '\\033c' > /dev/{terminal_name}")
+
+
+SHUTDOWN_STATUS_MARKERS = ["Stopping ", "Stopped ", "[  OK  ]", "Deactivated ", "Unmount"]
+
+
+def assert_no_shutdown_status_on(terminal_name):
+    leaked_text = terminal_text(terminal_name)
+    leaked_markers = [marker for marker in SHUTDOWN_STATUS_MARKERS if marker in leaked_text]
+    assert not leaked_markers, (
+        f"systemd printed shutdown status {leaked_markers} on {terminal_name} before bootvine took the console:\n"
+        f"{leaked_text}"
+    )

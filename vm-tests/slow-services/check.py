@@ -6,11 +6,6 @@ def unit_state(unit):
     return machine.succeed(f"systemctl is-active {unit} || true").strip()
 
 
-def foreground_console_text():
-    terminal_number = foreground_terminal().removeprefix("tty")
-    return machine.succeed(f"tr -cd '[:print:]' < /dev/vcs{terminal_number}")
-
-
 def assert_unit_start_stays_off_console(description):
     machine.succeed(f"systemd-run --wait --description='{description}' /run/current-system/sw/bin/true")
     console_text = foreground_console_text()
@@ -82,10 +77,13 @@ retry(lambda _: unit_state("bootvine") == "inactive", timeout_seconds=10)
 assert "boot already finished" in bootvine_journal(), "a restart after boot did not stand down"
 assert foreground_terminal() == foreground, "a restart after boot took the console"
 
+terminal_before_shutdown = foreground_terminal()
+wipe_terminal(terminal_before_shutdown)
 machine.succeed("systemctl poweroff --no-block")
 retry(lambda _: unit_state("sample-database") == "deactivating", timeout_seconds=60)
 wait_for_screen("Shutdown", "sample-database")
 assert_bootvine_in_front()
+assert_no_shutdown_status_on(terminal_before_shutdown)
 assert_text_visible(font_has_512_glyphs=True)
 machine.succeed("touch /run/release-sample-database")
 machine.wait_for_shutdown()

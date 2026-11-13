@@ -305,6 +305,16 @@ impl Drop for ForegroundVt {
     }
 }
 
+pub(crate) fn bring_own_terminal_forward() -> Result<(), Errno> {
+    let StdinTerminal::VirtualConsole(own) = StdinTerminal::try_from(stdin())? else {
+        return Ok(());
+    };
+    if active_vt()? != own {
+        activate(own)?;
+    }
+    Ok(())
+}
+
 fn activate(number: u16) -> Result<(), Errno> {
     let number = usize::from(number);
     unsafe { ioctl(stdin(), IntegerSetter::<VT_ACTIVATE>::new_usize(number)) }

@@ -1,11 +1,11 @@
 [Unit]
 Description=Live dependency tree of shutdown jobs
 DefaultDependencies=no
-After=bootvine.service display-manager.service
+After=bootvine.service
 
 [Service]
 Type=simple
-ExecStartPre=/usr/bin/bootvine save-console-state
+ExecStartPre=/usr/bin/bootvine take-shutdown-console
 ExecStart=/usr/bin/bootvine --shutdown
 ExecStopPost=/usr/bin/bootvine restore-console-state
 StandardInput=tty

@@ -136,6 +136,10 @@ impl ServiceManager for OpenrcLink {
         Ok(())
     }
 
+    fn silence_status_output(&self) -> Result<(), OpenrcError> {
+        Ok(())
+    }
+
     async fn quiet_status_output_during<Outer: From<OpenrcError>>(
         &self,
         watch: impl Future<Output = Result<StatusRelease, Outer>>,

@@ -6,7 +6,7 @@ use bootvine::{
     config_reading::{ConfigError, read_config_file},
     console_session::{
         resume_console::{close_resume_console, open_resume_console},
-        saved_console_state::{restore_console_state, save_console_state},
+        saved_console_state::{restore_console_state, save_console_state, take_shutdown_console},
         watch_loop::{Settings, run},
     },
     system_install::install_files::{
@@ -90,6 +90,12 @@ enum Command {
     )]
     SaveConsoleState,
     #[command(
+        about = "Save the console state, bring bootvine's terminal forward and silence the status \
+                 output of the service manager before the viewer starts; run as ExecStartPre of \
+                 bootvine-shutdown.service"
+    )]
+    TakeShutdownConsole,
+    #[command(
         about = "Restore the kernel console level and systemd's status output however the viewer \
                  ended; run as ExecStopPost of the bootvine units"
     )]
@@ -130,6 +136,7 @@ fn main() -> ExitCode {
         Some(Command::OpenResumeConsole) => report_outcome(open_resume_console()),
         Some(Command::CloseResumeConsole) => report_outcome(close_resume_console()),
         Some(Command::SaveConsoleState) => report_outcome(save_console_state()),
+        Some(Command::TakeShutdownConsole) => report_outcome(take_shutdown_console()),
         Some(Command::RestoreConsoleState) => report_outcome(restore_console_state()),
         None => watch_boot(cli.watch),
     }

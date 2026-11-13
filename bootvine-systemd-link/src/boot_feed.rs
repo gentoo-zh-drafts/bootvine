@@ -356,10 +356,10 @@ impl BootTracker {
         connection: &mut BusConnection,
         attempt: ConnectAttempt,
     ) -> Result<Vec<BootChange>, LinkFailure> {
-        connection.subscribe().await?;
         if self.scope == Scope::System {
             connection.silence_status_output().await?;
         }
+        connection.subscribe().await?;
         let shutting_down = self.phase == Phase::Shutdown;
         let jobs: Vec<JobListing> = connection
             .list_jobs()

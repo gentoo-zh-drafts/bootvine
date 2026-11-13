@@ -22,10 +22,13 @@ assert "handing the console over" in journal, "never handed the console over"
 assert foreground_terminal() != f"tty{BOOTVINE_TERMINAL}", "bootvine kept the console without a display manager"
 machine.wait_until_tty_matches("1", "login: ")
 
+terminal_before_shutdown = foreground_terminal()
+wipe_terminal(terminal_before_shutdown)
 machine.succeed("systemctl poweroff --no-block")
 retry(lambda _: unit_state("sample-database") == "deactivating", timeout_seconds=60)
 wait_for_screen("Shutdown", "sample-database")
 assert_bootvine_in_front()
+assert_no_shutdown_status_on(terminal_before_shutdown)
 machine.succeed("touch /run/release-sample-database")
 machine.wait_for_shutdown()
 recording.stop()

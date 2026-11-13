@@ -49,6 +49,8 @@ pub trait ServiceManager: Clone + 'static {
 
     fn restore_status_output(&self) -> Result<(), Self::Failure>;
 
+    fn silence_status_output(&self) -> Result<(), Self::Failure>;
+
     fn quiet_status_output_during<Outer: From<Self::Failure>>(
         &self,
         watch: impl Future<Output = Result<StatusRelease, Outer>>,

@@ -134,6 +134,10 @@ impl ServiceManager for SystemdLink {
         Ok(Session::open(Scope::System)?.restore_configured_status()?)
     }
 
+    fn silence_status_output(&self) -> Result<(), LinkError> {
+        Ok(Session::open(Scope::System)?.silence_status_now()?)
+    }
+
     async fn quiet_status_output_during<Outer: From<LinkError>>(
         &self,
         watch: impl Future<Output = Result<StatusRelease, Outer>>,

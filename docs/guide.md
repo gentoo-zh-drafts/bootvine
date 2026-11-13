@@ -5,6 +5,16 @@ with each. The GIFs come from the [scripted demos](#scripted-demos); the WebP
 animations are real boots of the [sample machines](#sample-machines), recorded
 by their [VM checks](development.md#testing).
 
+## systemd and OpenRC
+
+| | systemd | OpenRC |
+| --- | --- | --- |
+| [Boot](#booting-through-the-initrd) | from the initrd through stage 2 with a systemd initrd; [stage 2 only otherwise](#without-a-systemd-initrd) | stage 2 only, since OpenRC runs nothing in the initramfs |
+| [Resume from hibernation](#resuming-from-hibernation) | yes, with a systemd initrd | no |
+| [Shutdown](#shutdown), poweroff and reboot | yes | no |
+| [Passphrase prompts](#passphrase-prompts) | answered in place | steps aside to the prompt |
+| [Failures](#failures) | with the unit's last journal lines | without a reason line, since OpenRC keeps no journal |
+
 ## Reading the screen
 
 <img src="https://codeberg.org/wvhulle/bootvine/raw/branch/recordings/boot.gif" width="691" alt="A boot through the initrd into stage 2, with one failed unit">
