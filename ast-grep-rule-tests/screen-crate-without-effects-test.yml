@@ -15,3 +15,5 @@ invalid:
   - "fn command_line() -> String { std::fs::read_to_string(\"/proc/cmdline\").unwrap_or_default() }"
   - "fn home() -> Option<String> { std::env::var(\"HOME\").ok() }"
   - "fn stamp() -> Instant { Instant::now() }"
+  - "fn marker_seen(marker: &Path) -> bool { marker.exists() }"
+  - "fn is_profile(path: &Path) -> bool { path.join(\"system\").is_dir() }"

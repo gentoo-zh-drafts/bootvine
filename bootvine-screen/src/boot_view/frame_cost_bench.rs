@@ -1,4 +1,8 @@
 #![cfg(test)]
+#![expect(
+    clippy::print_stdout,
+    reason = "the benchmark reports its timings when run by hand"
+)]
 
 use std::{
     hint::black_box,

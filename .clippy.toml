@@ -1,14 +1,4 @@
 disallowed-methods = [
-  { path = "std::path::Path::exists", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
-  { path = "std::path::Path::try_exists", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
-  { path = "std::path::Path::is_file", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
-  { path = "std::path::Path::is_dir", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
-  { path = "std::path::Path::is_symlink", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
-  { path = "std::path::Path::metadata", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
-  { path = "std::path::Path::symlink_metadata", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
-  { path = "std::path::Path::read_dir", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
-  { path = "std::path::Path::read_link", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
-  { path = "std::path::Path::canonicalize", reason = "touches the filesystem behind a path value; read it in a runtime or subscription source and pass the fact in as a message" },
   { path = "u8::saturating_add", reason = "saturating hides an overflow or underflow behind a clamped value; use checked_* and pass the error on or expect, or #[expect] it with the reason clamping is the meaning", replacement = "checked_add" },
   { path = "u8::saturating_sub", reason = "saturating hides an overflow or underflow behind a clamped value; use checked_* and pass the error on or expect, or #[expect] it with the reason clamping is the meaning", replacement = "checked_sub" },
   { path = "u8::saturating_mul", reason = "saturating hides an overflow or underflow behind a clamped value; use checked_* and pass the error on or expect, or #[expect] it with the reason clamping is the meaning", replacement = "checked_mul" },
@@ -166,7 +156,6 @@ disallowed-methods = [
   { path = "std::time::Instant::saturating_duration_since", reason = "this silently yields zero when the earlier instant is later; use checked_duration_since and expect the order or handle it", replacement = "checked_duration_since" },
   { path = "std::time::Instant::elapsed", reason = "this silently yields zero when the earlier instant is later; use checked_duration_since and expect the order or handle it" },
   { path = "std::ffi::OsStr::to_string_lossy", reason = "this replaces invalid unicode silently; convert with to_str or from_utf8 and pass the error on, or use display() for text only shown to people", replacement = "to_str" },
-  { path = "std::path::Path::to_string_lossy", reason = "this replaces invalid unicode silently; convert with to_str or from_utf8 and pass the error on, or use display() for text only shown to people", replacement = "to_str" },
   { path = "alloc::string::String::from_utf8_lossy", reason = "this replaces invalid unicode silently; convert with to_str or from_utf8 and pass the error on, or use display() for text only shown to people", replacement = "std::str::from_utf8" },
   { path = "alloc::string::String::from_utf16_lossy", reason = "this replaces invalid unicode silently; convert with to_str or from_utf8 and pass the error on, or use display() for text only shown to people", replacement = "String::from_utf16" },
 ]

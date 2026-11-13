@@ -61,10 +61,6 @@ impl ServiceManager for SystemdManager {
             .is_ok_and(|booting| booting)
     }
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the systemd initrd announces itself with /etc/initrd-release"
-    )]
     fn initrd_running(&self) -> bool {
         Path::new(INITRD_RELEASE).exists()
     }

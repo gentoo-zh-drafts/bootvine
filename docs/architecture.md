@@ -389,8 +389,10 @@ The compiler keeps this shape:
 - **No effects in the screen.** `bootvine-screen` does not depend on tokio,
   rustix, dbus, libsystemd, crossterm or futures, so it cannot call them. The
   parts of std that touch the system (`std::fs`, `std::env`, `std::process`,
-  the wall clock) are caught by the `screen-crate-without-effects` ast-grep
-  rule, and `#![forbid(unsafe_code)]` keeps out raw system calls.
+  path metadata such as `Path::exists`, the wall clock) are caught by the
+  `screen-crate-without-effects` ast-grep rule. In its `lib.rs`,
+  `#![forbid(unsafe_code)]` keeps out raw system calls, and printing or
+  exiting is a lint error.
 - **The Elm signatures.** The screen loop in `bootvine` calls `update`,
   `view` and `subscriptions` with fixed types, so changing one breaks the
   build.

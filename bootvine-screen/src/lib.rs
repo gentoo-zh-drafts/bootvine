@@ -1,4 +1,10 @@
 #![forbid(unsafe_code)]
+#![deny(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::dbg_macro,
+    clippy::exit
+)]
 
 pub mod boot_model;
 #[cfg(test)]

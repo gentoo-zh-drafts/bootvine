@@ -6,10 +6,6 @@ use crate::{record_screencasts::RECORDINGS_DIRECTORY, task_error::TaskError};
 
 const RECORDINGS_BRANCH: &str = "refs/heads/recordings";
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the task checks the repository layout before it runs"
-)]
 pub fn publish_recordings() -> Result<(), TaskError> {
     if !Path::new(RECORDINGS_DIRECTORY).is_dir() {
         return Err(TaskError::RecordingsMissing);
