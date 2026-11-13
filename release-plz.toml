@@ -23,6 +23,18 @@ changelog_path = "CHANGELOG.md"
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
 
+[[package]]
+name = "bootvine-screen"
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+
+[[package]]
+name = "bootvine-systemd-link"
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+
 [changelog]
 tag_pattern = "v[0-9].*"
 sort_commits = "oldest"
