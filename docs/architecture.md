@@ -266,9 +266,18 @@ until PID 1 hands over to `systemd-shutdown` and the connection closes.
 `rescue.service`, so systemd stops bootvine before their shell starts. A
 failed unit in the initrd, such as a LUKS unlock that gave up, never reaches
 the switch to the real root, so bootvine would otherwise keep `tty12` in
-front. The shell then writes on `/dev/console`, which is that same terminal,
-over the tree. Stopping first switches back to the earlier terminal, and the
-shell starts there.
+front while the shell writes over the tree on `/dev/console`, which is that
+same terminal.
+
+When it is stopped and one of these shells has a start job queued, bootvine
+first reads the bus until it has seen that start job. systemd sends the
+signals of earlier failures before it, so every failure that led to the shell
+is then known. It also waits for their journal lines, at most 1.2 s in all.
+Then it clears `tty12` and prints a summary at the top: the header, the
+stages, the failure panel and the tally. It leaves `tty12` in front with the cursor
+below the summary, so the shell starts underneath it and the reason for the
+failure stays on screen. Any other stop switches back to the earlier terminal
+as before.
 
 ## The console
 

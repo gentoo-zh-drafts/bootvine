@@ -8,6 +8,7 @@ mod screen_chrome;
 #[cfg(test)]
 mod screen_render_fixtures;
 mod screen_spacing;
+mod shell_handover_summary;
 mod stage_summary;
 mod tree_height_fitting;
 #[cfg(test)]
@@ -30,7 +31,6 @@ use ratatui::{
 use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
 
-pub use self::screen_chrome::PasswordPrompt;
 use self::{
     failure_panel::FailurePanel,
     run_timeline::{RunningRun, Timeline, timeline_fits},
@@ -40,6 +40,7 @@ use self::{
     tree_height_fitting::rows_within_height,
     unit_tree::UnitTree,
 };
+pub use self::{screen_chrome::PasswordPrompt, shell_handover_summary::ShellHandoverSummary};
 use crate::{
     boot_model::{
         BootState, MilestoneRow, RowStatus, TreeNode, TreeRow, UnitKind, boot_origin::BootOrigin,
@@ -77,21 +78,24 @@ pub struct BootView<'a> {
     pub password_prompt: Option<PasswordPrompt<'a>>,
 }
 
-impl BootView<'_> {
-    fn failure_panel(&self) -> FailurePanel<'_> {
-        FailurePanel {
-            newest_first: self
-                .state
-                .failed
-                .iter()
-                .rev()
-                .filter(|failed| failed.kind.has_own_cause())
-                .collect(),
-            colors: &self.colors.failures,
-            glyphs: self.glyphs,
-        }
+fn failures_with_own_cause<'a>(
+    state: &'a BootState,
+    colors: &'a Colors,
+    glyphs: &'a Glyphs,
+) -> FailurePanel<'a> {
+    FailurePanel {
+        newest_first: state
+            .failed
+            .iter()
+            .rev()
+            .filter(|failed| failed.kind.has_own_cause())
+            .collect(),
+        colors: &colors.failures,
+        glyphs,
     }
+}
 
+impl BootView<'_> {
     fn timeline<'a>(&'a self, rows: &'a [TreeRow]) -> Timeline<'a> {
         let mut running: Vec<RunningRun> = rows
             .iter()
@@ -152,7 +156,7 @@ impl Widget for BootView<'_> {
             glyphs: self.glyphs,
         };
         let timeline = self.timeline(&all_rows);
-        let failure_panel = self.failure_panel();
+        let failure_panel = failures_with_own_cause(self.state, self.colors, self.glyphs);
         let footer = Footer {
             tally: self.state.tally(),
             colors: &self.colors.footer,

@@ -55,6 +55,22 @@ print(shown)
 print(journal)
 bootvine_state = machine.execute("systemctl is-active bootvine.service")[1].strip()
 assert bootvine_state != "active", f"bootvine still runs in emergency mode:\n{journal}"
-assert foreground_terminal() != f"tty{BOOTVINE_TERMINAL}", "tty12 stays in front of the emergency shell"
-assert "Initrd" not in shown, f"bootvine's frame is left under the emergency shell:\n{shown}"
+assert_bootvine_in_front()
+rows = shown.split("\n")
+
+
+def first_row_with(*fragments):
+    return next(
+        (index for index, row in enumerate(rows) if any(fragment in row for fragment in fragments)),
+        None,
+    )
+
+
+failure_row = first_row_with("systemd-cryptsetup@secret  ")
+journal_row = first_row_with("Passphrase incorrect", "Too many attempts", "Failed to activate")
+shell_row = first_row_with("emergency mode", "root account is locked")
+assert failure_row is not None, f"the failed unlock is not in the summary:\n{shown}"
+assert journal_row is not None, f"the summary misses the unlock's journal lines:\n{shown}"
+assert shell_row is not None, f"the emergency shell's message is not on screen:\n{shown}"
+assert failure_row < journal_row < shell_row, f"the shell does not start below the summary:\n{shown}"
 recording.stop()

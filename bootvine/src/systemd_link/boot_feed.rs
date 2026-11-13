@@ -6,7 +6,7 @@ use std::{
 };
 
 use dbus::Path;
-use futures::{Stream, StreamExt, stream};
+use futures::{FutureExt, Stream, StreamExt, future::BoxFuture, stream, stream::FuturesUnordered};
 use tokio::time::sleep;
 
 use crate::{
@@ -128,6 +128,7 @@ struct BootTracker {
     explained_failures: HashSet<String>,
     units_in_failed_state: HashSet<String>,
     root_switch: RootSwitch,
+    pending_journal_reads: FuturesUnordered<BoxFuture<'static, BootChange>>,
 }
 
 struct BusFeed {
@@ -153,6 +154,7 @@ impl BusFeed {
                 explained_failures: HashSet::new(),
                 units_in_failed_state: HashSet::new(),
                 root_switch: RootSwitch::NotQueued,
+                pending_journal_reads: FuturesUnordered::new(),
             },
         }
     }
@@ -169,7 +171,10 @@ impl BusFeed {
                 let received = self.tracker.receive(connection).await;
                 let switching_root = matches!(self.tracker.root_switch, RootSwitch::Queued(_));
                 Some(match received {
-                    Ok(changes) => connected_inputs(changes, switching_root),
+                    Ok(mut changes) => {
+                        changes.extend(self.tracker.finished_journal_reads());
+                        connected_inputs(changes, switching_root)
+                    }
                     Err(_) => self.lose_connection(),
                 })
             }
@@ -473,11 +478,36 @@ impl BootTracker {
             .ok()
             .flatten()
             .unwrap_or_else(|| fallback_reason.to_owned());
-        let log_lines = settled_unit_messages(&unit).await;
+        let settled_unit = unit.clone();
+        let settled_reason = reason.clone();
+        self.pending_journal_reads.push(
+            async move {
+                let log_lines = settled_unit_messages(&settled_unit).await;
+                BootChange::ExplainFailure {
+                    unit: settled_unit,
+                    cause: FailureCause {
+                        reason: settled_reason,
+                        log_lines,
+                    },
+                }
+            }
+            .boxed(),
+        );
         Some(BootChange::ExplainFailure {
             unit,
-            cause: FailureCause { reason, log_lines },
+            cause: FailureCause {
+                reason,
+                log_lines: Vec::new(),
+            },
         })
+    }
+
+    fn finished_journal_reads(&mut self) -> Vec<BootChange> {
+        let mut finished_reads = Vec::new();
+        while let Some(Some(change)) = self.pending_journal_reads.next().now_or_never() {
+            finished_reads.push(change);
+        }
+        finished_reads
     }
 
     fn boot_finished(&self) -> Vec<BootChange> {
@@ -539,6 +569,8 @@ pub fn bus_inputs(
 
 #[cfg(test)]
 mod tests {
+    use futures::future::{pending, ready};
+
     use super::*;
 
     fn host_tracker() -> BootTracker {
@@ -550,6 +582,7 @@ mod tests {
             explained_failures: HashSet::new(),
             units_in_failed_state: HashSet::new(),
             root_switch: RootSwitch::NotQueued,
+            pending_journal_reads: FuturesUnordered::new(),
         }
     }
 
@@ -586,5 +619,29 @@ mod tests {
         assert!(!tracker.enters_failed_state(unit, Activity::default()));
         assert!(!tracker.enters_failed_state(unit, in_state(ActiveState::Activating)));
         assert!(tracker.enters_failed_state(unit, in_state(ActiveState::Failed)));
+    }
+
+    #[test]
+    fn journal_reads_reach_the_screen_once_finished_without_holding_back_others() {
+        let mut tracker = host_tracker();
+        tracker.pending_journal_reads.push(pending().boxed());
+        tracker.pending_journal_reads.push(
+            ready(BootChange::ExplainFailure {
+                unit: "http-listener.service".to_owned(),
+                cause: FailureCause {
+                    reason: "exited with status 1".to_owned(),
+                    log_lines: vec!["port 80 already in use".to_owned()],
+                },
+            })
+            .boxed(),
+        );
+        let finished_reads = tracker.finished_journal_reads();
+        assert!(matches!(
+            finished_reads.as_slice(),
+            [BootChange::ExplainFailure { unit, cause }]
+                if unit == "http-listener.service" && cause.log_lines == ["port 80 already in use"]
+        ));
+        assert!(tracker.finished_journal_reads().is_empty());
+        assert_eq!(tracker.pending_journal_reads.len(), 1);
     }
 }

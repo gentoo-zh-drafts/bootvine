@@ -460,7 +460,7 @@ async fn play_scenario(terminal: &mut DefaultTerminal, scenario: &Scenario) -> i
     let inputs = stream::select(frame_inputs(), key_inputs()?);
     match watch_until_ending(&mut screen, terminal, inputs).await {
         WatchEnding::Failed(error) => Err(io::Error::other(error)),
-        WatchEnding::BootCompleted | WatchEnding::ViewerLeft => Ok(()),
+        WatchEnding::BootCompleted | WatchEnding::ViewerLeft | WatchEnding::ShellTookOver => Ok(()),
     }
 }
 

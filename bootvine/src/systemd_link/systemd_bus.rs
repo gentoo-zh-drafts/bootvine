@@ -20,7 +20,7 @@ use tokio::{
 };
 
 use crate::{
-    boot_model::{Activity, JobKind, JobResult, UnitFacts, UnitKind, UnitTimeouts},
+    boot_model::{Activity, JobKind, JobResult, SHELL_UNITS, UnitFacts, UnitKind, UnitTimeouts},
     console_session::stream_sources::{
         CarriedItem, readable_or_timeout, readable_source, unfold_carrying,
     },
@@ -232,6 +232,15 @@ impl Session {
 
     pub fn boot_in_progress(&self) -> Result<bool, Error> {
         read_boot_in_progress(&self.blocking_call(boot_in_progress_call()?)?)
+    }
+
+    pub fn shell_is_starting(&self) -> Result<bool, Error> {
+        let reply = self.blocking_call(manager_call("ListJobs", ())?)?;
+        let listed: Vec<ListedJob> = reply.read1()?;
+        Ok(listed
+            .into_iter()
+            .map(JobListing::from)
+            .any(|job| job.kind == JobKind::BringsUp && SHELL_UNITS.contains(&job.unit.as_str())))
     }
 
     fn send(&self, call: Message) -> Result<u32, Error> {

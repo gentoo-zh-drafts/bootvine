@@ -6,11 +6,13 @@ use ratatui::{
     Terminal,
     backend::Backend,
     buffer::{Buffer, CellDiffOption},
+    layout::Rect,
+    widgets::Widget,
 };
 
 use crate::{
     boot_model::{BootChange, BootState, boot_origin::BootOrigin},
-    boot_view::{BootProjection, BootView, PasswordPrompt, project_boot},
+    boot_view::{BootProjection, BootView, PasswordPrompt, ShellHandoverSummary, project_boot},
     console_session::console_palette::ConsoleLook,
     screen_settings::{color_scheme::Colors, config_file::Timing},
     systemd_link::{link_error::Error, monotonic_clock::monotonic_now},
@@ -34,6 +36,7 @@ pub enum ScreenInput {
 pub enum WatchEnding {
     BootCompleted,
     ViewerLeft,
+    ShellTookOver,
     Failed(Error),
 }
 
@@ -68,6 +71,12 @@ pub trait ConsoleDesk {
     fn lends_console(&mut self) -> bool {
         false
     }
+
+    fn shell_takes_over(&mut self) -> bool {
+        false
+    }
+
+    fn stay_in_front(&mut self) {}
 }
 
 struct CachedProjection {
@@ -148,9 +157,36 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
                 self.request_refresh(refresh);
                 ControlFlow::Continue(())
             }
+            ScreenInput::Terminate if self.desk.shell_takes_over() => {
+                ControlFlow::Break(WatchEnding::ShellTookOver)
+            }
             ScreenInput::Terminate => ControlFlow::Break(WatchEnding::ViewerLeft),
             ScreenInput::Failed(error) => ControlFlow::Break(WatchEnding::Failed(error)),
         }
+    }
+
+    pub fn absorb_late_boot_changes(&mut self, input: ScreenInput) {
+        if let ScreenInput::Boot(changes) = input {
+            let now = self.now();
+            let _ = self.apply_boot_changes(changes, now);
+        }
+    }
+
+    #[must_use]
+    pub fn shell_handover_summary(&self, columns: u16, most_rows: u16) -> Buffer {
+        let look = self.desk.look();
+        let summary = ShellHandoverSummary {
+            state: &self.state,
+            colors: &self.colors,
+            glyphs: &look.glyphs,
+            now: self.now(),
+            origin: &self.origin,
+        };
+        let area = Rect::new(0, 0, columns, summary.height().min(most_rows));
+        let mut printed = Buffer::empty(area);
+        summary.render(area, &mut printed);
+        look.palette.fit_frame(&mut printed);
+        printed
     }
 
     fn apply_boot_changes(
@@ -186,7 +222,17 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
     where
         Error: From<B::Error>,
     {
-        batch.into_iter().try_for_each(|input| self.absorb(input))?;
+        let mut ending = None;
+        for input in batch {
+            if ending.is_some() {
+                self.absorb_late_boot_changes(input);
+            } else if let ControlFlow::Break(reached) = self.absorb(input) {
+                ending = Some(reached);
+            }
+        }
+        if let Some(reached) = ending {
+            return ControlFlow::Break(reached);
+        }
         if self.desk.lends_console() {
             return ControlFlow::Continue(());
         }

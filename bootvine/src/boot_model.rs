@@ -164,3 +164,4 @@ const HOST_MILESTONES: [&str; 4] = [
 const SHUTDOWN_MILESTONES: [&str; 3] = ["shutdown.target", "umount.target", "final.target"];
 
 pub const HANDOFF_UNIT: &str = "display-manager.service";
+pub const SHELL_UNITS: [&str; 2] = ["emergency.service", "rescue.service"];

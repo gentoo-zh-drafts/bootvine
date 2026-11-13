@@ -15,6 +15,7 @@ use crate::{
         stream_sources::items_when_readable,
         watch_screen::{ConsoleDesk, Refresh, ScreenInput, WatchEnding},
     },
+    systemd_link::systemd_bus::{Scope, Session},
 };
 
 pub struct LiveDesk {
@@ -137,6 +138,20 @@ impl ConsoleDesk for LiveDesk {
 
     fn check_prompts(&mut self) {
         self.follow_requests(false);
+    }
+
+    fn shell_takes_over(&mut self) -> bool {
+        self.for_system
+            && self.foreground.is_some()
+            && Session::open(Scope::System)
+                .and_then(|session| session.shell_is_starting())
+                .unwrap_or(false)
+    }
+
+    fn stay_in_front(&mut self) {
+        if let Some(foreground) = self.foreground.take() {
+            foreground.stay_switched();
+        }
     }
 
     fn lends_console(&mut self) -> bool {

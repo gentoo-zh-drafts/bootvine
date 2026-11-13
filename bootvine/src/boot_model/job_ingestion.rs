@@ -3,8 +3,8 @@ use std::{collections::HashMap, time::Duration};
 use super::{
     ActiveState, Activity, BootState, FailedUnit, FailureCause, FailureExplanation, FailureKind,
     FinishedRun, FinishedStage, HANDOFF_UNIT, HOST_MILESTONES, JobKind, JobResult, Outcome,
-    PendingJob, Phase, Progress, Root, SHUTDOWN_MILESTONES, Tally, UnitFacts, UnitKind, UnitRecord,
-    unit_facts::display_label,
+    PendingJob, Phase, Progress, Root, SHELL_UNITS, SHUTDOWN_MILESTONES, Tally, UnitFacts,
+    UnitKind, UnitRecord, unit_facts::display_label,
 };
 
 impl UnitRecord {
@@ -149,6 +149,24 @@ impl BootState {
         if let Some(failed) = self.failed.iter_mut().find(|failed| failed.unit == unit) {
             failed.explanation = FailureExplanation::Explained(cause);
         }
+    }
+
+    #[must_use]
+    pub fn shell_start_queued(&self) -> bool {
+        self.jobs
+            .values()
+            .any(|unit| SHELL_UNITS.contains(&unit.as_str()))
+    }
+
+    #[must_use]
+    pub fn awaits_journal_lines(&self) -> bool {
+        self.failed.iter().any(|failed| {
+            failed.kind.has_own_cause()
+                && match &failed.explanation {
+                    FailureExplanation::Unexplained => true,
+                    FailureExplanation::Explained(cause) => cause.log_lines.is_empty(),
+                }
+        })
     }
 
     #[must_use]
@@ -385,6 +403,32 @@ mod tests {
             state.failed[0].explanation,
             FailureExplanation::Explained(cause)
         );
+    }
+
+    #[test]
+    fn a_shell_waits_for_its_start_job_and_the_journal_lines_of_every_failure() {
+        let mut state = sample();
+        assert!(!state.shell_start_queued());
+        state.finish_job(4, JobResult::Failed, 2000 * MS);
+        assert!(state.awaits_journal_lines());
+        state.explain_failure(
+            "nm.service",
+            FailureCause {
+                reason: "exited with status 1".to_owned(),
+                log_lines: Vec::new(),
+            },
+        );
+        assert!(state.awaits_journal_lines());
+        state.explain_failure(
+            "nm.service",
+            FailureCause {
+                reason: "exited with status 1".to_owned(),
+                log_lines: vec!["no carrier on eth0".to_owned()],
+            },
+        );
+        assert!(!state.awaits_journal_lines());
+        queue_unit(&mut state, 30, waiting("emergency.service", &[]), 2100 * MS);
+        assert!(state.shell_start_queued());
     }
 
     #[test]
