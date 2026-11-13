@@ -2,10 +2,6 @@ def start_failing_unit(unit):
     machine.succeed(f"systemctl start --no-block {unit}")
 
 
-def unit_result(unit):
-    return machine.succeed(f"systemctl show -p Result --value {unit}").strip()
-
-
 def failure_panel():
     lines = screen().splitlines()
     start = next(index for index, line in enumerate(lines) if " Failures " in line)
@@ -28,10 +24,9 @@ wait_for_screen("Stage 2", "Boot held for the check")
 wait_for_screen("initrd-nic-firmware-load  exited with status 1")
 
 start_failing_unit("failure-report")
+wait_for_screen("[×] failure-report")
 wait_for_screen("app-config-check  exited with status 2", "missing key 'listen'")
-retry(lambda _: unit_result("failure-report") != "", timeout_seconds=10)
 assert "× failure-report" not in failure_panel(), f"a dependency failure reached the panel:\n{screen()}"
-assert "failure-report" in screen(), f"the dependency failure left the tree:\n{screen()}"
 
 start_failing_unit("worker-pool")
 wait_for_screen("worker-pool", "SIGSEGV", "starting worker pool with 4 threads")
@@ -56,6 +51,6 @@ assert "Started Upstream uplink" not in failure_panel(), f"systemd's own start l
 print(screen())
 
 machine.succeed("touch /run/release-boot-failures-hold")
-retry(lambda _: "handing the console over" in bootvine_journal(), timeout_seconds=60)
+wait_for_bootvine_message("handing the console over")
 print(bootvine_journal())
 recording.stop()

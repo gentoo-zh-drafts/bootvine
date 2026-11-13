@@ -39,7 +39,7 @@ machine.succeed(f"printf '\\033[20;5H{FOREIGN_WRITE}' > /dev/tty{BOOTVINE_TERMIN
 retry(lambda _: FOREIGN_WRITE not in screen(), timeout_seconds=10)
 
 machine.wait_for_unit("greetd.service")
-retry(lambda _: "another program took the console" in bootvine_journal(), timeout_seconds=60)
+wait_for_bootvine_message("another program took the console")
 assert unit_state("late-sensor-probe") == "activating", "the boot finished before the display manager took over"
 assert foreground_terminal() != f"tty{BOOTVINE_TERMINAL}", "bootvine took the console back from the display manager"
 machine.wait_until_tty_matches("1", "Username:")

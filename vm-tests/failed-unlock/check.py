@@ -1,7 +1,3 @@
-def answered_prompts():
-    return bootvine_journal().count("answered a password prompt")
-
-
 def pending_prompt():
     listing = machine.succeed("ls /run/systemd/ask-password").split()
     return next((name for name in listing if name.startswith("ask.")), "")
@@ -24,9 +20,10 @@ def answer_wrongly_until_emergency(last_try):
         return True
     prompt = pending_prompt()
     if prompt and prompt not in answered_prompt_files and "passphrase" in screen():
-        answered_before = answered_prompts()
         machine.send_chars("not the passphrase\n")
-        retry(lambda _: answered_prompts() > answered_before, timeout_seconds=30)
+        wait_for_bootvine_message(
+            "answered a password prompt", occurrences=len(answered_prompt_files) + 1
+        )
         answered_prompt_files.append(prompt)
     return in_emergency_mode()
 
