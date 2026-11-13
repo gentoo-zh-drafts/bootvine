@@ -361,21 +361,53 @@ Everything runs on one thread, shaped as an
 [Elm application](https://guide.elm-lang.org/architecture/):
 
 - **`Model`** holds the boot, the password prompt, who holds the console and
-  where the handover stands (`bootvine/src/screen_components/`).
-- **`update(model, msg, now)`** applies one `Msg` and returns the `Cmd`s to
-  carry out. It reads no files, devices or clocks; the time arrives with it.
+  where the handover stands.
+- **`update(model, message, now)`** applies one `Message` and returns the
+  `Command`s to carry out. It reads no files, devices or clocks; the time
+  arrives with it.
 - **`view(model)`** renders the frame, the shell summary or nothing.
-- **`subscriptions(model)`** lists the `Sub`s the model needs. After every
-  update the loop compares that list with what runs, starts what is new and
-  drops what is no longer wanted.
+- **`subscriptions(model)`** lists the `Subscription`s the model needs. After
+  every update the loop compares that list with what runs, starts what is new
+  and drops what is no longer wanted.
 
 A runtime carries out commands and turns subscriptions into streams of
 messages. The live runtime does it with syscalls and the bus; the scripted
 demos have their own runtime that plays a script through the same messages.
 A command's result comes back as a message, such as `AskShellStarting`
-answered by `ShellQueryAnswered`. ast-grep rules keep this shape: the model
-and view layers import nothing that touches the system, only a runtime
-matches on a `Cmd` or `Sub`, and messages carry no closures.
+answered by `ShellQueryAnswered`.
+
+### Three crates
+
+| Crate | Holds | Depends on |
+| --- | --- | --- |
+| `bootvine-screen` | the model, the view and the screen application: `Model`, `Message`, `Command`, `Subscription`, `update`, `view`, `subscriptions`; settings parsing | ratatui's core and widgets, serde, petgraph and other pure libraries |
+| `bootvine-systemd-link` | everything that knows systemd: the job feed over the private socket, journal lines, the password agent, status output, unit names and the vocabulary of milestones, display manager and shells | `bootvine-screen`, dbus, libsystemd, tokio, rustix |
+| `bootvine` | the live runtime, the console (virtual terminal, `/dev/vcs12`, printk, font, resume console), the screen loop, install and `main` | both |
+
+The compiler keeps this shape:
+
+- **No effects in the screen.** `bootvine-screen` does not depend on tokio,
+  rustix, dbus, libsystemd, crossterm or futures, so it cannot call them. The
+  parts of std that touch the system (`std::fs`, `std::env`, `std::process`,
+  the wall clock) are caught by the `screen-crate-without-effects` ast-grep
+  rule, and `#![forbid(unsafe_code)]` keeps out raw system calls.
+- **The Elm signatures.** The screen loop in `bootvine` calls `update`,
+  `view` and `subscriptions` with fixed types, so changing one breaks the
+  build.
+- **Plain data.** `Command` must be `Clone + Eq + Debug` and `Subscription`
+  also `Hash`, checked at compile time; closures and trait objects cannot
+  meet that.
+
+### Other init systems
+
+The screen knows no systemd names: the milestones, the display manager, the
+shell units and what takes over after shutdown come from a
+`ManagerVocabulary`, and each unit's kind and short name come with its facts.
+`bootvine` talks to the init system through a `ServiceManager` trait (job
+feed, password prompts, shell and display manager questions, status output);
+`SystemdManager` implements it on top of `bootvine-systemd-link`. Supporting
+another init system means a new link crate and a new implementation of the
+trait.
 
 Subscriptions wait on the kernel or on systemd rather than on timers:
 

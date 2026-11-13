@@ -3,18 +3,19 @@ use std::{
 };
 
 use bootvine::{
+    config_reading::{ConfigError, read_config_file},
     console_session::{
         resume_console::{close_resume_console, open_resume_console},
         saved_console_state::{restore_console_state, save_console_state},
         watch_loop::{Settings, run},
     },
-    screen_settings::config_file::{
-        Config, ConfigError, Timing, default_config_table, read_config_file,
-    },
     system_install::install_files::{
         InstallOptions, UninstallOptions, install_files, uninstall_files,
     },
-    systemd_link::{boot_feed::RootRequest, systemd_bus::Scope},
+};
+use bootvine_screen::{
+    boot_model::{RootRequest, Scope},
+    screen_settings::config_file::{Config, Timing, default_config_table},
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use jiff::fmt::friendly::SpanParser;

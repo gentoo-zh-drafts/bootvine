@@ -146,27 +146,52 @@ dependencies = [
 name = "bootvine"
 version = "0.1.3"
 dependencies = [
+ "bootvine-screen",
+ "bootvine-systemd-link",
  "clap",
  "crossterm 0.29.0",
- "dbus",
  "futures",
- "heck",
  "jiff",
- "petgraph",
  "ratatui",
  "rustix 1.1.5",
  "ser_nix",
- "serde",
- "serde_plain",
- "systemd",
  "thiserror 2.0.21",
  "tokio",
  "toml",
  "tracing",
  "tracing-journald",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "bootvine-screen"
+version = "0.1.3"
+dependencies = [
+ "heck",
+ "jiff",
+ "petgraph",
+ "ratatui-core",
+ "ratatui-widgets",
+ "serde",
+ "toml",
+ "tracing",
  "unicode-truncate",
  "unicode-width",
+ "zeroize",
+]
+
+[[package]]
+name = "bootvine-systemd-link"
+version = "0.1.3"
+dependencies = [
+ "bootvine-screen",
+ "dbus",
+ "futures",
+ "rustix 1.1.5",
+ "systemd",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
  "zeroize",
 ]
 
@@ -1596,6 +1621,8 @@ name = "scripted-demos"
 version = "0.1.0"
 dependencies = [
  "bootvine",
+ "bootvine-screen",
+ "bootvine-systemd-link",
  "futures",
  "ratatui",
  "tokio",
@@ -1645,15 +1672,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
-]
-
-[[package]]
-name = "serde_plain"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ce1fc6db65a611022b23a0dec6975d63fb80a302cb3388835ff02c097258d50"
-dependencies = [
- "serde",
 ]
 
 [[package]]

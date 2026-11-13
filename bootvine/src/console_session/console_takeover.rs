@@ -1,21 +1,17 @@
 use std::{collections::HashSet, fs, io, mem, os::fd::BorrowedFd, ptr};
 
+use bootvine_screen::{
+    boot_view::console_palette::{ConsoleLook, ConsolePalette},
+    screen_components::console_claim::KernelLevel,
+    screen_settings::font_glyphs::Glyphs,
+};
 use rustix::{
     io::Errno,
     ioctl::{Getter, IntegerSetter, Opcode, Updater, ioctl},
     stdio::stdin,
     termios::ttyname,
 };
-use tracing::{info, warn};
-
-use crate::{
-    console_session::{
-        ask_password,
-        console_palette::{ConsoleLook, ConsolePalette},
-    },
-    screen_components::console_claim::KernelLevel,
-    screen_settings::font_glyphs::Glyphs,
-};
+use tracing::warn;
 
 const GIO_UNIMAP: Opcode = 0x4B66;
 const VT_GETSTATE: Opcode = 0x5603;
@@ -303,10 +299,6 @@ impl HeldTerminal {
 
 impl Drop for ForegroundVt {
     fn drop(&mut self) {
-        if ask_password::requested() {
-            info!("leaving a password prompt to the console agent on this terminal");
-            return;
-        }
         if let Err(error) = activate(self.previous) {
             warn!(error = %error, vt = self.previous, "could not switch back to the previous virtual console");
         }

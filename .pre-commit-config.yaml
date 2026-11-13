@@ -15,6 +15,6 @@ repos:
         pass_filenames: false
       - id: ast-grep-rules
         name: ast-grep design rules
-        entry: sh -c 'ast-grep test --skip-snapshot-tests && ast-grep scan --error bootvine/src scripted-demos/src xtask/src'
+        entry: sh -c 'ast-grep test --skip-snapshot-tests && ast-grep scan --error'
         language: system
         pass_filenames: false

@@ -1,0 +1,36 @@
+[package]
+categories = ["command-line-utilities", "os::linux-apis"]
+description = "The boot screen of bootvine as data and pure functions: model, messages, commands, subscriptions, update and view"
+edition = "2024"
+include = ["/src", "/LICENSE"]
+keywords = ["systemd", "boot", "initrd", "tui", "console"]
+license = "GPL-3.0-or-later"
+name = "bootvine-screen"
+readme = "../README.md"
+repository = "https://codeberg.org/wvhulle/bootvine"
+rust-version = "1.91"
+version = "0.1.3"
+
+[lints]
+workspace = true
+
+[dependencies]
+heck = "0.5.0"
+jiff = { version = "0.2.38", default-features = false, features = [
+  "serde",
+  "std",
+] }
+petgraph = { version = "0.8.3", default-features = false, features = [
+  "std",
+  "graphmap",
+] }
+ratatui-core = { version = "0.1.2", features = ["serde"] }
+ratatui-widgets = { version = "0.3.2", default-features = false, features = [
+  "unstable-rendered-line-info",
+] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = { version = "1.1.8", features = ["preserve_order"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+unicode-truncate = "2.0.1"
+unicode-width = "0.2.2"
+zeroize = "1.9.1"

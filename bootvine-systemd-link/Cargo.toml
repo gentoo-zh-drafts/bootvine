@@ -1,0 +1,44 @@
+[package]
+categories = ["os::linux-apis"]
+description = "The systemd side of bootvine: the job feed over systemd's private socket, journal lines, the password agent and the switch to the real root"
+edition = "2024"
+include = ["/src", "/LICENSE"]
+keywords = ["systemd", "boot", "initrd", "tui", "console"]
+license = "GPL-3.0-or-later"
+name = "bootvine-systemd-link"
+readme = "../README.md"
+repository = "https://codeberg.org/wvhulle/bootvine"
+rust-version = "1.91"
+version = "0.1.3"
+
+[lints]
+workspace = true
+
+[dependencies]
+bootvine-screen = { version = "0.1.3", path = "../bootvine-screen" }
+dbus = "0.9.12"
+futures = { version = "0.3.34", default-features = false, features = [
+  "std",
+  "async-await",
+] }
+rustix = { version = "1.1.5", features = [
+  "event",
+  "fs",
+  "process",
+  "stdio",
+  "system",
+  "termios",
+  "time",
+] }
+systemd = { version = "0.10.1", default-features = false, features = [
+  "journal",
+] }
+thiserror = "2.0.12"
+tokio = { version = "1.54.0", default-features = false, features = [
+  "rt",
+  "time",
+  "net",
+  "signal",
+] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+zeroize = "1.9.1"

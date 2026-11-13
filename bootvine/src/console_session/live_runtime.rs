@@ -1,35 +1,30 @@
 use std::{future::ready, io, path::Path, rc::Rc, time::Duration};
 
+use bootvine_screen::{
+    boot_model::{BootState, Phase, RootRequest, Scope},
+    screen_components::{
+        console_claim::{ConsoleClaim, Foreground, ForegroundOutcome, MarkerPresence, OwnConsole},
+        handover::Handover,
+        prompt::Prompt,
+        screen_application::{Command, Message, Model, Subscription},
+    },
+    screen_settings::{color_scheme::Colors, config_file::Timing},
+};
+use bootvine_systemd_link::{link_error::Error, monotonic_clock::monotonic_now};
 use futures::{FutureExt, StreamExt, stream, stream::LocalBoxStream};
 use rustix::stdio::stdin;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::{
-    boot_model::{BootState, Phase},
-    console_session::{
-        ask_password::{self, awaited_requests, send_answer, until_abandoned, watch_requests},
-        console_takeover::{HeldTerminal, KernelConsole, StdinTerminal, console_look},
-        origin_reading::read_boot_origin,
-        resume_console::{RESUME_CONSOLE_MARKER, resume_console_is_open},
-        screen_loop::ScreenRuntime,
-        stream_sources::{
-            BACKGROUND_CHECK_INTERVAL, ConsoleContentWatch, DirectoryChange, DirectoryWatch,
-            console_overwrite_inputs, frame_inputs, items_when_readable, key_inputs,
-            periodic_inputs, resume_marker_inputs, terminal_switch_inputs, termination_inputs,
-        },
-    },
-    screen_components::{
-        console_claim::{ConsoleClaim, Foreground, ForegroundOutcome, MarkerPresence, OwnConsole},
-        handover::{DisplayManager, Handover, ShellStart},
-        prompt::Prompt,
-        screen_app::{Cmd, Model, Msg, Sub},
-    },
-    screen_settings::{color_scheme::Colors, config_file::Timing},
-    systemd_link::{
-        boot_feed::{RootRequest, bus_inputs},
-        monotonic_clock::monotonic_now,
-        systemd_bus::{Scope, Session},
+use crate::console_session::{
+    console_takeover::{HeldTerminal, KernelConsole, StdinTerminal, console_look},
+    origin_reading::read_boot_origin,
+    resume_console::{RESUME_CONSOLE_MARKER, resume_console_is_open},
+    screen_loop::ScreenRuntime,
+    service_manager::ServiceManager,
+    stream_sources::{
+        ConsoleContentWatch, console_overwrite_inputs, frame_inputs, key_inputs,
+        resume_marker_inputs, terminal_switch_inputs, termination_inputs,
     },
 };
 
@@ -60,7 +55,8 @@ pub struct LiveSettings {
     pub timing: Timing,
 }
 
-pub struct LiveRuntime {
+pub struct LiveRuntime<Manager: ServiceManager> {
+    manager: Manager,
     scope: Scope,
     phase: Phase,
     target: RootRequest,
@@ -85,38 +81,17 @@ fn marker_presence() -> MarkerPresence {
     }
 }
 
-fn failure_stream(error: io::Error) -> LocalBoxStream<'static, Msg> {
-    stream::once(ready(Msg::Failed(error.into()))).boxed_local()
+fn failure_stream(error: io::Error) -> LocalBoxStream<'static, Message> {
+    stream::once(ready(Message::Failed(Error::from(error).into()))).boxed_local()
 }
 
-fn list_awaited_requests() -> Msg {
-    Msg::PasswordRequestsListed(awaited_requests())
-}
-
-fn password_request_inputs() -> LocalBoxStream<'static, Msg> {
-    let watch = match watch_requests() {
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            info!("not allowed to watch password prompts, polling for them instead");
-            return periodic_inputs(BACKGROUND_CHECK_INTERVAL, list_awaited_requests).boxed_local();
-        }
-        watched => watched.expect("the password request directory can be watched"),
-    };
-    let changes = items_when_readable(watch, DirectoryWatch::changed)
-        .expect("the runtime accepts an inotify descriptor")
-        .filter(|change| ready(*change == DirectoryChange::Changed))
-        .map(|_| list_awaited_requests());
-    stream::once(ready(list_awaited_requests()))
-        .chain(changes)
-        .boxed_local()
-}
-
-impl LiveRuntime {
+impl<Manager: ServiceManager> LiveRuntime<Manager> {
     #[must_use]
-    pub fn start(settings: LiveSettings) -> (Self, Model) {
+    pub fn start(manager: Manager, settings: LiveSettings) -> (Self, Model) {
         let stdin_terminal = StdinTerminal::try_from(stdin())
             .expect("naming the terminal on stdin fails only when there is none");
         let (kernel, held_terminal) = match settings.scope {
-            Scope::System if ask_password::requested() => {
+            Scope::System if manager.passwords_requested() => {
                 info!("a password prompt is already showing, staying behind it");
                 (KernelConsole::quiet(), HeldTerminal::StayingBehind)
             }
@@ -128,7 +103,7 @@ impl LiveRuntime {
             StdinTerminal::OtherTerminal | StdinTerminal::NotATerminal => OwnConsole::Elsewhere,
         };
         let model = Model {
-            boot: BootState::new(settings.phase),
+            boot: BootState::new(settings.phase, &manager.vocabulary()),
             origin: read_boot_origin(),
             colors: settings.colors,
             timing: settings.timing,
@@ -143,6 +118,7 @@ impl LiveRuntime {
             handover: Handover::Watching,
         };
         let runtime = Self {
+            manager,
             scope: settings.scope,
             phase: settings.phase,
             target: settings.target,
@@ -155,107 +131,107 @@ impl LiveRuntime {
     }
 }
 
-impl ScreenRuntime for LiveRuntime {
-    fn perform(&mut self, command: Cmd) -> Vec<Msg> {
+impl<Manager: ServiceManager> Drop for LiveRuntime<Manager> {
+    fn drop(&mut self) {
+        if self.manager.passwords_requested() {
+            info!("leaving a password prompt to the console agent on this terminal");
+            self.held_terminal.stay_switched();
+        }
+    }
+}
+
+impl<Manager: ServiceManager> ScreenRuntime for LiveRuntime<Manager> {
+    fn perform(&mut self, command: Command) -> Vec<Message> {
         match command {
-            Cmd::TakeForeground => {
+            Command::TakeForeground => {
                 self.held_terminal = HeldTerminal::take(self.stdin_terminal);
-                vec![Msg::ForegroundTaken(match self.held_terminal {
+                vec![Message::ForegroundTaken(match self.held_terminal {
                     HeldTerminal::Holding(_) => ForegroundOutcome::Taken,
                     HeldTerminal::StayingBehind => ForegroundOutcome::Refused,
                 })]
             }
-            Cmd::ActivateOwnTerminal => {
+            Command::ActivateOwnTerminal => {
                 if let HeldTerminal::Holding(held) = &self.held_terminal {
                     let _ = held.insist();
                 }
                 Vec::new()
             }
-            Cmd::QuietKernel => {
+            Command::QuietKernel => {
                 let _ = self.kernel.keep_quiet();
                 Vec::new()
             }
-            Cmd::InspectConsole => vec![Msg::ConsoleInspected {
+            Command::InspectConsole => vec![Message::ConsoleInspected {
                 kernel: self.kernel.level(),
                 look: console_look(self.stdin_terminal),
             }],
-            Cmd::ReadOrigin => vec![Msg::OriginRead(read_boot_origin())],
-            Cmd::SendAnswer {
+            Command::ReadOrigin => vec![Message::OriginRead(read_boot_origin())],
+            Command::SendAnswer {
                 file,
                 socket,
                 passphrase,
-            } => match send_answer(&socket, &passphrase) {
+            } => match self.manager.answer_password(&socket, &passphrase) {
                 Ok(()) => {
                     info!(path = %file.display(), "answered a password prompt");
-                    vec![Msg::AnswerDelivered(file)]
+                    vec![Message::AnswerDelivered(file)]
                 }
                 Err(error) => {
                     warn!(error = %error, "cannot answer the password prompt");
-                    vec![Msg::AnswerUndelivered(file)]
+                    vec![Message::AnswerUndelivered(file)]
                 }
             },
-            Cmd::AskShellStarting => {
-                let starting = Session::open(Scope::System)
-                    .and_then(|session| session.shell_is_starting())
-                    .expect(
-                        "the private socket of systemd answers while a shell is about to start",
-                    );
-                vec![Msg::ShellQueryAnswered(if starting {
-                    ShellStart::Starting
-                } else {
-                    ShellStart::NotStarting
-                })]
+            Command::AskShellStarting => {
+                vec![Message::ShellQueryAnswered(
+                    self.manager.shell_is_starting(),
+                )]
             }
-            Cmd::AskDisplayManagerState => {
-                let running = Session::open(Scope::System)
-                    .and_then(|session| session.display_manager_running())
-                    .expect("the private socket of systemd answers while the boot runs");
-                vec![Msg::DisplayManagerAnswered(if running {
-                    DisplayManager::Running
-                } else {
-                    DisplayManager::NotRunning
-                })]
-            }
-            Cmd::StayInFront => {
+            Command::AskDisplayManagerState => vec![Message::DisplayManagerAnswered(
+                self.manager.display_manager_running(),
+            )],
+            Command::StayInFront => {
                 self.held_terminal.stay_switched();
                 Vec::new()
             }
         }
     }
 
-    fn subscribe(&mut self, subscription: &Sub) -> LocalBoxStream<'static, Msg> {
+    fn subscribe(&mut self, subscription: &Subscription) -> LocalBoxStream<'static, Message> {
         match subscription {
-            Sub::BootFeed => bus_inputs(self.phase, self.scope, self.target.clone()).boxed_local(),
-            Sub::Keys => key_inputs().map_or_else(failure_stream, StreamExt::boxed_local),
-            Sub::Termination => {
+            Subscription::BootFeed => {
+                self.manager
+                    .boot_changes(self.phase, self.scope, self.target.clone())
+            }
+            Subscription::Keys => key_inputs().map_or_else(failure_stream, StreamExt::boxed_local),
+            Subscription::Termination => {
                 termination_inputs().map_or_else(failure_stream, StreamExt::boxed_local)
             }
-            Sub::PasswordRequests => password_request_inputs(),
-            Sub::AbandonmentOf {
+            Subscription::PasswordRequests => self.manager.password_requests(),
+            Subscription::AbandonmentOf {
                 file,
                 deadline,
                 asker,
             } => {
                 let file = file.clone();
                 stream::once(
-                    until_abandoned(*deadline, *asker).map(move |()| Msg::PromptAbandoned(file)),
+                    self.manager
+                        .until_password_abandoned(*deadline, *asker)
+                        .map(move |()| Message::PromptAbandoned(file)),
                 )
                 .boxed_local()
             }
-            Sub::TerminalSwitches => terminal_switch_inputs().boxed_local(),
-            Sub::ResumeMarker => resume_marker_inputs().boxed_local(),
-            Sub::ConsoleWrites => match self.console_contents.clone() {
+            Subscription::TerminalSwitches => terminal_switch_inputs().boxed_local(),
+            Subscription::ResumeMarker => resume_marker_inputs().boxed_local(),
+            Subscription::ConsoleWrites => match self.console_contents.clone() {
                 ConsoleContents::Watched(watch) => console_overwrite_inputs(watch).boxed_local(),
                 ConsoleContents::Unwatched => stream::pending().boxed_local(),
             },
-            Sub::FrameTicks => frame_inputs().boxed_local(),
-            Sub::DeadlineAt(deadline) => {
+            Subscription::FrameTicks => frame_inputs().boxed_local(),
+            Subscription::DeadlineAt(deadline) => {
                 #[expect(
                     clippy::disallowed_methods,
                     reason = "a deadline already behind the clock passes at once"
                 )]
                 let remaining = deadline.saturating_sub(monotonic_now());
-                stream::once(sleep(remaining).map(|()| Msg::DeadlinePassed)).boxed_local()
+                stream::once(sleep(remaining).map(|()| Message::DeadlinePassed)).boxed_local()
             }
         }
     }

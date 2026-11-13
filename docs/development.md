@@ -4,7 +4,9 @@
 
 | Folder | Holds |
 | --- | --- |
-| `bootvine/` | the published crate: the library, the `bootvine` binary and the unit and initrd files it installs |
+| `bootvine/` | the published crate: the live runtime, the console, the `bootvine` binary and the unit and initrd files it installs |
+| `bootvine-screen/` | the screen as data and pure functions: model, messages, commands, subscriptions, update and view; not published |
+| `bootvine-systemd-link/` | the systemd side: job feed, journal, password agent and vocabulary; not published |
 | `scripted-demos/` | the scripted boot, shutdown and passphrase demos, and the VHS tapes that record them |
 | `xtask/` | repository tasks run with `cargo xtask` |
 | `vm-tests/` | the sample NixOS machines, one folder each with its VM check |
@@ -24,7 +26,7 @@ Work inside the dev shell (`direnv allow` once, with
 
 ```sh
 cargo clippy --workspace --all-targets
-ast-grep scan --error bootvine/src scripted-demos/src xtask/src
+ast-grep scan --error
 cargo fmt --all
 ```
 

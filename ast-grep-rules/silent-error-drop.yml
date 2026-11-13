@@ -4,9 +4,7 @@ severity: error
 message: Turning a Result into an Option drops its error silently.
 note: Pass the error on with ?; when absence is the contract, log the error first with inspect_err; expect when failure is impossible.
 files:
-  - bootvine/src/**/*.rs
-  - scripted-demos/src/**/*.rs
-  - xtask/src/**/*.rs
+  - "*/src/**/*.rs"
 rule:
   any:
     - all:

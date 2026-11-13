@@ -1,0 +1,72 @@
+id: screen-crate-without-effects
+language: rust
+severity: error
+message: The screen crate stays free of effects.
+note: Its Cargo.toml already keeps out tokio, rustix, dbus, systemd and crossterm; this rule covers the parts of std the compiler cannot keep out. Read files, the environment and the clock in a runtime, and pass the result in as a message. A file that declares itself test-only with an inner cfg(test) attribute is exempt.
+files:
+  - bootvine-screen/src/**/*.rs
+utils:
+  effectful-std-module:
+    any:
+      - pattern: fs
+      - pattern: env
+      - pattern: process
+      - pattern: thread
+      - pattern: net
+      - pattern: os
+  wall-clock:
+    any:
+      - pattern: Instant
+      - pattern: SystemTime
+  std-time-path:
+    kind: scoped_identifier
+    all:
+      - has:
+          field: path
+          pattern: std
+      - has:
+          field: name
+          pattern: time
+rule:
+  any:
+    - kind: scoped_identifier
+      all:
+        - has:
+            field: path
+            pattern: std
+        - has:
+            field: name
+            matches: effectful-std-module
+    - kind: scoped_identifier
+      all:
+        - has:
+            field: path
+            matches: std-time-path
+        - has:
+            field: name
+            matches: wall-clock
+    - pattern: Instant::now()
+    - pattern: SystemTime::now()
+    - matches: effectful-std-module
+      inside:
+        kind: use_list
+        stopBy: end
+        inside:
+          kind: scoped_use_list
+          has:
+            field: path
+            pattern: std
+    - matches: wall-clock
+      inside:
+        kind: use_list
+        inside:
+          kind: scoped_use_list
+          has:
+            field: path
+            matches: std-time-path
+  not:
+    inside:
+      kind: source_file
+      stopBy: end
+      has:
+        pattern: "#![cfg(test)]"

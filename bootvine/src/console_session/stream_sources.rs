@@ -1,88 +1,37 @@
 use std::{
-    fs::{self, File},
-    future::Future,
+    fs::File,
     io::{self, Read, Seek, SeekFrom},
     iter,
-    os::fd::{AsRawFd, OwnedFd, RawFd},
     path::Path,
     rc::Rc,
     time::Duration,
 };
 
-use crossterm::event::{self, Event};
-use futures::{FutureExt, Stream, StreamExt, future::ready, stream};
+use bootvine_screen::screen_components::{
+    console_claim::MarkerPresence, passphrase_input::KeyPress, screen_application::Message,
+};
+use bootvine_systemd_link::{
+    descriptor_streams::{DirectoryChange, DirectoryWatch, items_when_readable, periodic_inputs},
+    link_error::Error,
+};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use futures::{Stream, StreamExt, future::ready, stream};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
-    fs::inotify::{self, CreateFlags, WatchFlags},
-    io::{Errno, pread, read},
+    io::pread,
 };
 use tokio::{
     io::{Interest, unix::AsyncFd},
     signal::unix::{SignalKind, signal},
-    time::{Interval, MissedTickBehavior, interval},
 };
 use tracing::info;
 
-use crate::{
-    console_session::resume_console::{
-        RESUME_CONSOLE_DIRECTORY, RESUME_CONSOLE_MARKER, resume_console_is_open,
-    },
-    screen_components::{console_claim::MarkerPresence, screen_app::Msg},
+use crate::console_session::resume_console::{
+    RESUME_CONSOLE_DIRECTORY, RESUME_CONSOLE_MARKER, resume_console_is_open,
 };
 
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
-pub const BACKGROUND_CHECK_INTERVAL: Duration = Duration::from_millis(100);
-const INOTIFY_BUFFER: usize = 4096;
 const FOREGROUND_TERMINAL_STATE: &str = "/sys/class/tty/tty0/active";
-
-pub struct DirectoryWatch {
-    inotify: OwnedFd,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DirectoryChange {
-    Changed,
-    Unchanged,
-}
-
-impl DirectoryWatch {
-    pub fn open(directory: &str) -> io::Result<Self> {
-        fs::create_dir_all(directory)?;
-        let inotify = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK)?;
-        inotify::add_watch(
-            &inotify,
-            directory,
-            WatchFlags::CLOSE_WRITE
-                | WatchFlags::MOVED_TO
-                | WatchFlags::MOVED_FROM
-                | WatchFlags::DELETE
-                | WatchFlags::ONLYDIR,
-        )?;
-        Ok(Self { inotify })
-    }
-
-    #[must_use]
-    pub fn changed(&self) -> DirectoryChange {
-        let mut events = [0_u8; INOTIFY_BUFFER];
-        let drained_reads = iter::from_fn(|| match read(&self.inotify, &mut events) {
-            Ok(0) | Err(Errno::AGAIN) => None,
-            Ok(read_bytes) => Some(read_bytes),
-            Err(error) => panic!("reading inotify events failed: {error}"),
-        })
-        .count();
-        if drained_reads > 0 {
-            DirectoryChange::Changed
-        } else {
-            DirectoryChange::Unchanged
-        }
-    }
-}
-
-impl AsRawFd for DirectoryWatch {
-    fn as_raw_fd(&self) -> RawFd {
-        self.inotify.as_raw_fd()
-    }
-}
 
 fn rearm_attribute(attribute: &mut File) -> io::Result<String> {
     attribute.seek(SeekFrom::Start(0))?;
@@ -133,7 +82,7 @@ impl ConsoleContentWatch {
     }
 }
 
-pub fn console_overwrite_inputs(watch: Rc<ConsoleContentWatch>) -> impl Stream<Item = Msg> {
+pub fn console_overwrite_inputs(watch: Rc<ConsoleContentWatch>) -> impl Stream<Item = Message> {
     stream::unfold(watch, |watch| async move {
         loop {
             let mut readiness = watch
@@ -144,13 +93,13 @@ pub fn console_overwrite_inputs(watch: Rc<ConsoleContentWatch>) -> impl Stream<I
             readiness.clear_ready();
             drop(readiness);
             if watch.overwritten_since_forgotten() {
-                return Some((Msg::ConsoleOverwritten, watch));
+                return Some((Message::ConsoleOverwritten, watch));
             }
         }
     })
 }
 
-pub fn terminal_switch_inputs() -> impl Stream<Item = Msg> {
+pub fn terminal_switch_inputs() -> impl Stream<Item = Message> {
     let watched = match watched_foreground_terminal() {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             info!("the kernel has no virtual consoles, not following console switches");
@@ -169,14 +118,14 @@ pub fn terminal_switch_inputs() -> impl Stream<Item = Msg> {
                 .expect("the foreground console attribute stays readable")
         };
         Some((
-            Msg::TerminalActivated(active_console_number(&attribute)),
+            Message::TerminalActivated(active_console_number(&attribute)),
             watched,
         ))
     })
     .left_stream()
 }
 
-pub fn resume_marker_inputs() -> impl Stream<Item = Msg> {
+pub fn resume_marker_inputs() -> impl Stream<Item = Message> {
     let watch = match DirectoryWatch::open(RESUME_CONSOLE_DIRECTORY) {
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
             info!(
@@ -191,7 +140,7 @@ pub fn resume_marker_inputs() -> impl Stream<Item = Msg> {
         .expect("the runtime accepts an inotify descriptor")
         .filter(|change| ready(*change == DirectoryChange::Changed))
         .map(|_| {
-            Msg::ResumeMarker(
+            Message::ResumeMarker(
                 if resume_console_is_open(Path::new(RESUME_CONSOLE_MARKER)) {
                     MarkerPresence::Present
                 } else {
@@ -202,55 +151,8 @@ pub fn resume_marker_inputs() -> impl Stream<Item = Msg> {
         .left_stream()
 }
 
-pub struct CarriedItem<Item, State> {
-    pub item: Item,
-    pub state: State,
-}
-
-pub fn unfold_carrying<State, Item, Next, Pending>(
-    initial: State,
-    mut next: Next,
-) -> impl Stream<Item = Item>
-where
-    Next: FnMut(State) -> Pending,
-    Pending: Future<Output = Option<CarriedItem<Item, State>>>,
-{
-    stream::unfold(initial, move |state| {
-        next(state).map(|carried| carried.map(|carried| (carried.item, carried.state)))
-    })
-}
-
-pub fn readable_source<Source: AsRawFd>(source: Source) -> io::Result<AsyncFd<Source>> {
-    Ok(unsafe { AsyncFd::register_with_interest(source, Interest::READABLE) }?)
-}
-
-pub fn items_when_readable<Source: AsRawFd, Item>(
-    source: Source,
-    read: impl Fn(&Source) -> Item,
-) -> io::Result<impl Stream<Item = Item>> {
-    let readiness = readable_source(source)?;
-    Ok(stream::poll_fn(move |context| {
-        readiness.poll_read_ready(context).map(|ready| {
-            let mut guard = ready.expect("the runtime keeps polling a registered descriptor");
-            guard.clear_ready();
-            Some(read(readiness.get_ref()))
-        })
-    }))
-}
-
-fn steady_interval(period: Duration) -> Interval {
-    let mut ticks = interval(period);
-    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    ticks
-}
-
-pub fn periodic_inputs(period: Duration, input: fn() -> Msg) -> impl Stream<Item = Msg> {
-    let mut ticks = steady_interval(period);
-    stream::poll_fn(move |context| ticks.poll_tick(context).map(|_| Some(input())))
-}
-
-pub fn frame_inputs() -> impl Stream<Item = Msg> {
-    periodic_inputs(FRAME_INTERVAL, || Msg::Tick)
+pub fn frame_inputs() -> impl Stream<Item = Message> {
+    periodic_inputs(FRAME_INTERVAL, || Message::Tick)
 }
 
 fn drain_terminal_events() -> io::Result<Vec<Event>> {
@@ -262,14 +164,41 @@ fn drain_terminal_events() -> io::Result<Vec<Event>> {
     .collect()
 }
 
-fn terminal_inputs(drained: io::Result<Vec<Event>>) -> Vec<Msg> {
+fn key_press_of(event: &Event) -> Option<KeyPress> {
+    let Event::Key(KeyEvent {
+        code,
+        modifiers,
+        kind: KeyEventKind::Press,
+        ..
+    }) = event
+    else {
+        return None;
+    };
+    let control = modifiers.contains(KeyModifiers::CONTROL);
+    Some(match *code {
+        KeyCode::Enter => KeyPress::Enter,
+        KeyCode::Backspace => KeyPress::Backspace,
+        KeyCode::Esc => KeyPress::Escape,
+        KeyCode::Char('u') if control => KeyPress::ClearLine,
+        KeyCode::Char('c') if control => KeyPress::Interrupt,
+        KeyCode::Char(_) if control => KeyPress::Other,
+        KeyCode::Char(character) => KeyPress::Character(character),
+        _ => KeyPress::Other,
+    })
+}
+
+fn terminal_inputs(drained: io::Result<Vec<Event>>) -> Vec<Message> {
     match drained {
-        Ok(events) => events.into_iter().map(Msg::KeyPressed).collect(),
-        Err(error) => vec![Msg::Failed(error.into())],
+        Ok(events) => events
+            .iter()
+            .filter_map(key_press_of)
+            .map(Message::KeyPressed)
+            .collect(),
+        Err(error) => vec![Message::Failed(Error::from(error).into())],
     }
 }
 
-pub fn key_inputs() -> io::Result<impl Stream<Item = Msg>> {
+pub fn key_inputs() -> io::Result<impl Stream<Item = Message>> {
     Ok(
         items_when_readable(io::stdin(), |_| drain_terminal_events())?
             .map(terminal_inputs)
@@ -277,10 +206,10 @@ pub fn key_inputs() -> io::Result<impl Stream<Item = Msg>> {
     )
 }
 
-pub fn termination_inputs() -> io::Result<impl Stream<Item = Msg>> {
+pub fn termination_inputs() -> io::Result<impl Stream<Item = Message>> {
     let mut terminate = signal(SignalKind::terminate())?;
     Ok(stream::once(async move {
         terminate.recv().await;
-        Msg::Terminated
+        Message::Terminated
     }))
 }

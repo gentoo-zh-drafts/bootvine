@@ -9,25 +9,28 @@ use std::{
     time::Duration,
 };
 
-use bootvine::{
+use bootvine::console_session::{
+    screen_loop::{ScreenRuntime, run_screen},
+    stream_sources::{frame_inputs, key_inputs},
+};
+use bootvine_screen::{
     boot_model::{
         ActiveState, Activity, BootChange, BootState, FailureCause, JobKind, JobResult, Phase,
-        UnitFacts, UnitTimeouts, boot_origin::BootOrigin,
+        Scope, UnitFacts, UnitTimeouts, boot_origin::BootOrigin,
     },
-    console_session::{
-        console_palette::ConsoleLook,
-        screen_loop::{ScreenRuntime, run_screen},
-        stream_sources::{frame_inputs, key_inputs},
-    },
+    boot_view::console_palette::ConsoleLook,
     screen_components::{
         console_claim::{ConsoleClaim, Foreground, MarkerPresence, OwnConsole},
         handover::{Handover, WatchEnding},
         password_request::{PasswordRequest, PromptAsker, PromptDeadline, RequestHint},
         prompt::Prompt,
-        screen_app::{Cmd, Model, Msg, Sub},
+        screen_application::{Command, Message, Model, Subscription},
     },
     screen_settings::{color_scheme::Colors, config_file::Timing},
-    systemd_link::{monotonic_clock::monotonic_now, systemd_bus::Scope},
+};
+use bootvine_systemd_link::{
+    link_error::Error, monotonic_clock::monotonic_now, systemd_names::systemd_unit_facts,
+    systemd_vocabulary::systemd_vocabulary,
 };
 use futures::{FutureExt, StreamExt, stream, stream::LocalBoxStream};
 use ratatui::DefaultTerminal;
@@ -138,16 +141,16 @@ impl ScriptedJob {
         let is_stopping = |unit: &&str| steps.iter().any(|step| step.unit == *unit && step.stops);
         let (before, after): (Vec<&str>, Vec<&str>) =
             self.step.after.iter().copied().partition(is_stopping);
-        UnitFacts {
-            name: self.step.unit.to_owned(),
-            description: describe(self.step.unit).map(str::to_owned),
-            after: after.into_iter().map(ToString::to_string).collect(),
-            before: before.into_iter().map(ToString::to_string).collect(),
-            timeouts: UnitTimeouts {
+        systemd_unit_facts(
+            self.step.unit.to_owned(),
+            describe(self.step.unit).map(str::to_owned),
+            after.into_iter().map(ToString::to_string).collect(),
+            before.into_iter().map(ToString::to_string).collect(),
+            UnitTimeouts {
                 job_running: self.step.timeout,
                 ..UnitTimeouts::default()
             },
-        }
+        )
     }
 
     fn kind(&self) -> JobKind {
@@ -399,7 +402,7 @@ impl DemoBoot {
             .collect()
     }
 
-    fn advance(&mut self, now: Duration) -> Vec<Msg> {
+    fn advance(&mut self, now: Duration) -> Vec<Message> {
         let changes: Vec<BootChange> = self
             .script
             .advance(now)
@@ -409,14 +412,14 @@ impl DemoBoot {
         let asked = self.script.asked_request();
         let listing = (asked != self.listed).then(|| {
             self.listed.clone_from(&asked);
-            Msg::PasswordRequestsListed(asked.into_iter().collect())
+            Message::PasswordRequestsListed(asked.into_iter().collect())
         });
         let rejected = self.script.was_rejected(now) && !self.rejection_reported;
         let rejection = rejected
             .then(|| {
                 self.listed
                     .as_ref()
-                    .map(|request| Msg::AnswerRejected(request.file.clone()))
+                    .map(|request| Message::AnswerRejected(request.file.clone()))
             })
             .flatten();
         self.rejection_reported |= rejected;
@@ -427,11 +430,11 @@ impl DemoBoot {
                 >= FINAL_FRAME
         };
         (!changes.is_empty())
-            .then_some(Msg::Boot(changes))
+            .then_some(Message::Boot(changes))
             .into_iter()
             .chain(listing)
             .chain(rejection)
-            .chain(ended.then_some(Msg::BootSourceEnded))
+            .chain(ended.then_some(Message::BootSourceEnded))
             .collect()
     }
 }
@@ -448,55 +451,58 @@ fn demo_now(epoch: Duration) -> Duration {
 }
 
 impl ScreenRuntime for DemoRuntime {
-    fn perform(&mut self, command: Cmd) -> Vec<Msg> {
+    fn perform(&mut self, command: Command) -> Vec<Message> {
         match command {
-            Cmd::SendAnswer {
+            Command::SendAnswer {
                 file, passphrase, ..
             } => {
                 let mut boot = self.boot.borrow_mut();
                 boot.script
                     .answer(passphrase.expose(), demo_now(self.epoch));
                 boot.rejection_reported = false;
-                vec![Msg::AnswerDelivered(file)]
+                vec![Message::AnswerDelivered(file)]
             }
-            Cmd::ReadOrigin => vec![Msg::OriginRead(demo_origin())],
-            Cmd::TakeForeground
-            | Cmd::ActivateOwnTerminal
-            | Cmd::QuietKernel
-            | Cmd::InspectConsole
-            | Cmd::AskShellStarting
-            | Cmd::AskDisplayManagerState
-            | Cmd::StayInFront => Vec::new(),
+            Command::ReadOrigin => vec![Message::OriginRead(demo_origin())],
+            Command::TakeForeground
+            | Command::ActivateOwnTerminal
+            | Command::QuietKernel
+            | Command::InspectConsole
+            | Command::AskShellStarting
+            | Command::AskDisplayManagerState
+            | Command::StayInFront => Vec::new(),
         }
     }
 
-    fn subscribe(&mut self, subscription: &Sub) -> LocalBoxStream<'static, Msg> {
+    fn subscribe(&mut self, subscription: &Subscription) -> LocalBoxStream<'static, Message> {
         let epoch = self.epoch;
         match subscription {
-            Sub::BootFeed => {
+            Subscription::BootFeed => {
                 let boot = Rc::clone(&self.boot);
                 let mut ticks = interval(FRAME_TICK);
                 stream::poll_fn(move |context| ticks.poll_tick(context).map(|_| Some(())))
                     .flat_map(move |()| stream::iter(boot.borrow_mut().advance(demo_now(epoch))))
                     .boxed_local()
             }
-            Sub::Keys => match key_inputs() {
+            Subscription::Keys => match key_inputs() {
                 Ok(keys) => keys.boxed_local(),
-                Err(error) => stream::once(async move { Msg::Failed(error.into()) }).boxed_local(),
+                Err(error) => {
+                    stream::once(async move { Message::Failed(Error::from(error).into()) })
+                        .boxed_local()
+                }
             },
-            Sub::FrameTicks => frame_inputs().boxed_local(),
-            Sub::DeadlineAt(deadline) => {
+            Subscription::FrameTicks => frame_inputs().boxed_local(),
+            Subscription::DeadlineAt(deadline) => {
                 let remaining = deadline
                     .checked_sub(demo_now(epoch))
                     .unwrap_or(Duration::ZERO);
-                stream::once(sleep(remaining).map(|()| Msg::DeadlinePassed)).boxed_local()
+                stream::once(sleep(remaining).map(|()| Message::DeadlinePassed)).boxed_local()
             }
-            Sub::Termination
-            | Sub::PasswordRequests
-            | Sub::AbandonmentOf { .. }
-            | Sub::TerminalSwitches
-            | Sub::ResumeMarker
-            | Sub::ConsoleWrites => stream::pending().boxed_local(),
+            Subscription::Termination
+            | Subscription::PasswordRequests
+            | Subscription::AbandonmentOf { .. }
+            | Subscription::TerminalSwitches
+            | Subscription::ResumeMarker
+            | Subscription::ConsoleWrites => stream::pending().boxed_local(),
         }
     }
 
@@ -516,7 +522,7 @@ fn demo_origin() -> BootOrigin {
 
 async fn play_scenario(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<()> {
     let script = Script::begin(scenario.steps, 1);
-    let mut boot = BootState::new(scenario.phase);
+    let mut boot = BootState::new(scenario.phase, &systemd_vocabulary());
     script
         .opening_changes(scenario.describe, Duration::ZERO)
         .into_iter()

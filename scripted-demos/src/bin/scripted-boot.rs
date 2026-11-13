@@ -1,6 +1,6 @@
 use std::{io, time::Duration};
 
-use bootvine::boot_model::Phase;
+use bootvine_screen::boot_model::Phase;
 use scripted_demos::scripted_boot::{Scenario, ScriptedFailure, Step, failing, play, step};
 
 const INITRD: &[Step] = &[

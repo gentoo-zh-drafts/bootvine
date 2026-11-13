@@ -1,5 +1,5 @@
 [workspace]
-members = ["bootvine", "scripted-demos", "xtask"]
+members = ["bootvine", "bootvine-screen", "bootvine-systemd-link", "scripted-demos", "xtask"]
 resolver = "3"
 
 [workspace.lints.clippy]

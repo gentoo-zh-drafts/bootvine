@@ -1,14 +1,11 @@
 use std::fs;
 
-use crate::{
-    console_session::{
-        console_takeover::{KERNEL_PRINTK, console_level},
-        resume_console::RESUME_CONSOLE_DIRECTORY,
-    },
-    systemd_link::{
-        link_error::Error,
-        systemd_bus::{Scope, Session},
-    },
+use bootvine_systemd_link::link_error::Error;
+
+use crate::console_session::{
+    console_takeover::{KERNEL_PRINTK, console_level},
+    resume_console::RESUME_CONSOLE_DIRECTORY,
+    service_manager::{ServiceManager, SystemdManager},
 };
 
 const SAVED_KERNEL_CONSOLE_LEVEL: &str = "/run/bootvine/kernel-console-level";
@@ -24,6 +21,6 @@ pub fn restore_console_state() -> Result<(), Error> {
         KERNEL_PRINTK,
         fs::read_to_string(SAVED_KERNEL_CONSOLE_LEVEL)?,
     )?;
-    Session::open(Scope::System)?.restore_configured_status()?;
+    SystemdManager.restore_configured_status()?;
     Ok(())
 }

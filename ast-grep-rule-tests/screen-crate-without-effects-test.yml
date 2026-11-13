@@ -1,0 +1,17 @@
+id: screen-crate-without-effects
+valid:
+  - "use std::{collections::HashMap, iter::once, time::Duration};"
+  - "use std::time::Duration;"
+  - "fn elapsed(now: Duration, origin: Duration) -> Duration { now.saturating_sub(origin) }"
+  - "#![cfg(test)]\nuse std::time::Instant;\nfn timed() -> Instant { Instant::now() }"
+invalid:
+  - "use std::fs::read_to_string;"
+  - "use std::fs;"
+  - "use std::{fs, iter::once};"
+  - "use std::{fs::read_dir, io::ErrorKind};"
+  - "use std::time::Instant;"
+  - "use std::time::{Duration, Instant};"
+  - "use std::os::unix::net::UnixDatagram;"
+  - "fn command_line() -> String { std::fs::read_to_string(\"/proc/cmdline\").unwrap_or_default() }"
+  - "fn home() -> Option<String> { std::env::var(\"HOME\").ok() }"
+  - "fn stamp() -> Instant { Instant::now() }"

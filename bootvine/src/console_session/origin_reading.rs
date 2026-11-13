@@ -4,11 +4,10 @@ use std::{
     path::Path,
 };
 
-use rustix::system::uname;
-
-use crate::boot_model::boot_origin::{
+use bootvine_screen::boot_model::boot_origin::{
     BootOrigin, SystemLink, generation_of, init_system, nixos_version, pretty_name,
 };
+use rustix::system::uname;
 
 const KERNEL_COMMAND_LINE: &str = "/proc/cmdline";
 const SYSTEM_PROFILES: &str = "/nix/var/nix/profiles";

@@ -1,6 +1,6 @@
 use std::{io, time::Duration};
 
-use bootvine::boot_model::Phase;
+use bootvine_screen::boot_model::Phase;
 use scripted_demos::scripted_boot::{Scenario, Step, play, step, unlocking};
 
 const ROOT_PARTITION: &str =

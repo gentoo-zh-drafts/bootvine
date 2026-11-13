@@ -6,6 +6,16 @@ use std::{
     time::Duration,
 };
 
+use bootvine_screen::{
+    boot_view::{BootProjection, project_boot},
+    screen_components::{
+        console_claim::Refresh,
+        screen_application::{
+            Command, Message, Model, ScreenView, Subscription, subscriptions, update, view,
+        },
+    },
+};
+use bootvine_systemd_link::link_error::Error;
 use crossterm::{
     cursor::{MoveTo, Show},
     execute,
@@ -21,33 +31,24 @@ use ratatui::{
     widgets::Widget,
 };
 
-use crate::{
-    boot_view::{BootProjection, project_boot},
-    screen_components::{
-        console_claim::Refresh,
-        screen_app::{Cmd, Model, Msg, ScreenView, Sub, subscriptions, update, view},
-    },
-    systemd_link::link_error::Error,
-};
-
 const INPUT_BATCH: usize = 64;
 const PROJECTION_REFRESH: Duration = Duration::from_millis(100);
 const ROWS_LEFT_FOR_SHELL: u16 = 8;
 
 pub trait ScreenRuntime {
-    fn perform(&mut self, command: Cmd) -> Vec<Msg>;
-    fn subscribe(&mut self, subscription: &Sub) -> LocalBoxStream<'static, Msg>;
+    fn perform(&mut self, command: Command) -> Vec<Message>;
+    fn subscribe(&mut self, subscription: &Subscription) -> LocalBoxStream<'static, Message>;
     fn now(&self) -> Duration;
     fn drawn(&mut self) {}
 }
 
 enum SubscriptionSource {
-    Running(LocalBoxStream<'static, Msg>),
+    Running(LocalBoxStream<'static, Message>),
     Exhausted,
 }
 
 struct ActiveSubscription {
-    subscription: Sub,
+    subscription: Subscription,
     source: SubscriptionSource,
 }
 
@@ -64,7 +65,7 @@ struct SubscriptionSet {
 }
 
 impl SubscriptionSet {
-    fn sync(&mut self, wanted: Vec<Sub>, runtime: &mut impl ScreenRuntime) {
+    fn sync(&mut self, wanted: Vec<Subscription>, runtime: &mut impl ScreenRuntime) {
         self.active
             .retain(|active| wanted.contains(&active.subscription));
         wanted.into_iter().for_each(|subscription| {
@@ -83,9 +84,9 @@ impl SubscriptionSet {
     }
 
     fn drain_source(
-        source: &mut LocalBoxStream<'static, Msg>,
+        source: &mut LocalBoxStream<'static, Message>,
         context: &mut Context<'_>,
-        ready: &mut Vec<Msg>,
+        ready: &mut Vec<Message>,
     ) -> SourcePoll {
         while ready.len() < INPUT_BATCH {
             match source.poll_next_unpin(context) {
@@ -97,7 +98,7 @@ impl SubscriptionSet {
         SourcePoll::Delivered
     }
 
-    fn poll_ready_messages(&mut self, context: &mut Context<'_>) -> Poll<Vec<Msg>> {
+    fn poll_ready_messages(&mut self, context: &mut Context<'_>) -> Poll<Vec<Message>> {
         let count = self.active.len();
         let mut ready = Vec::new();
         for offset in 0..count {
@@ -168,7 +169,7 @@ where
         let batch = poll_fn(|context| active_subscriptions.poll_ready_messages(context)).await;
         let mut queue = VecDeque::from(batch);
         while let Some(message) = queue.pop_front() {
-            if matches!(message, Msg::Boot(_)) {
+            if matches!(message, Message::Boot(_)) {
                 projection = ProjectionCache::Stale;
             }
             let commands = update(model, message, runtime.now());
@@ -210,7 +211,7 @@ where
         overwrite_every_cell(terminal.backend_mut(), &painted)?;
     }
     runtime.drawn();
-    let _ = update(model, Msg::Drawn, now);
+    let _ = update(model, Message::Drawn, now);
     Ok(())
 }
 

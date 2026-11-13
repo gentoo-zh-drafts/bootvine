@@ -1,9 +1,0 @@
-id: only-runtimes-perform-commands
-valid:
-  - "fn subscriptions(model: &Model) -> Vec<Sub> { vec![Sub::BootFeed, Sub::DeadlineAt(model.deadline)] }"
-  - "fn press(model: &mut Model) -> Vec<Cmd> { vec![Cmd::TakeForeground] }"
-  - "fn wanted(active: &Sub, wanted: &[Sub]) -> bool { wanted.contains(active) }"
-invalid:
-  - "fn perform(command: Cmd) { match command { Cmd::TakeForeground => {}, _ => {} } }"
-  - "fn perform(command: Cmd) { match command { Cmd::SendAnswer { file, .. } => {}, _ => {} } }"
-  - "fn subscribe(subscription: Sub) { if let Sub::DeadlineAt(deadline) = subscription {} }"
