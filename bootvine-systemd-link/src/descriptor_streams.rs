@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use bootvine_screen::screen_components::screen_application::Message;
 use futures::{FutureExt, Stream, stream};
 use rustix::{
     fs::inotify::{self, CreateFlags, WatchFlags},
@@ -17,21 +16,21 @@ use tokio::{
     time::{Interval, MissedTickBehavior, interval},
 };
 
-pub const BACKGROUND_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+pub(crate) const BACKGROUND_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const INOTIFY_BUFFER: usize = 4096;
 
-pub struct DirectoryWatch {
+pub(crate) struct DirectoryWatch {
     inotify: OwnedFd,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DirectoryChange {
+pub(crate) enum DirectoryChange {
     Changed,
     Unchanged,
 }
 
 impl DirectoryWatch {
-    pub fn open(directory: &str) -> io::Result<Self> {
+    pub(crate) fn open(directory: &str) -> io::Result<Self> {
         fs::create_dir_all(directory)?;
         let inotify = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK)?;
         inotify::add_watch(
@@ -47,7 +46,7 @@ impl DirectoryWatch {
     }
 
     #[must_use]
-    pub fn changed(&self) -> DirectoryChange {
+    pub(crate) fn changed(&self) -> DirectoryChange {
         let mut events = [0_u8; INOTIFY_BUFFER];
         let drained_reads = iter::from_fn(|| match read(&self.inotify, &mut events) {
             Ok(0) | Err(Errno::AGAIN) => None,
@@ -69,12 +68,12 @@ impl AsRawFd for DirectoryWatch {
     }
 }
 
-pub struct CarriedItem<Item, State> {
-    pub item: Item,
-    pub state: State,
+pub(crate) struct CarriedItem<Item, State> {
+    pub(crate) item: Item,
+    pub(crate) state: State,
 }
 
-pub fn unfold_carrying<State, Item, Next, Pending>(
+pub(crate) fn unfold_carrying<State, Item, Next, Pending>(
     initial: State,
     mut next: Next,
 ) -> impl Stream<Item = Item>
@@ -87,11 +86,11 @@ where
     })
 }
 
-pub fn readable_source<Source: AsRawFd>(source: Source) -> io::Result<AsyncFd<Source>> {
+pub(crate) fn readable_source<Source: AsRawFd>(source: Source) -> io::Result<AsyncFd<Source>> {
     Ok(unsafe { AsyncFd::register_with_interest(source, Interest::READABLE) }?)
 }
 
-pub fn items_when_readable<Source: AsRawFd, Item>(
+pub(crate) fn items_when_readable<Source: AsRawFd, Item>(
     source: Source,
     read: impl Fn(&Source) -> Item,
 ) -> io::Result<impl Stream<Item = Item>> {
@@ -111,7 +110,10 @@ fn steady_interval(period: Duration) -> Interval {
     ticks
 }
 
-pub fn periodic_inputs(period: Duration, input: fn() -> Message) -> impl Stream<Item = Message> {
+pub(crate) fn periodic_inputs<Item>(
+    period: Duration,
+    mut input: impl FnMut() -> Item,
+) -> impl Stream<Item = Item> {
     let mut ticks = steady_interval(period);
     stream::poll_fn(move |context| ticks.poll_tick(context).map(|_| Some(input())))
 }

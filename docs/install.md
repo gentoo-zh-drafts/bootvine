@@ -107,6 +107,30 @@ For the initrd, use the dracut module as above, or on
    sudo mkinitcpio -P
    ```
 
+## OpenRC
+
+On Alpine, Gentoo, Artix or Devuan with [OpenRC](https://github.com/OpenRC/openrc),
+build without systemd, which also drops the libdbus and libsystemd
+dependencies:
+
+```sh
+cargo install bootvine --no-default-features --features openrc
+```
+
+Then install the init script `/etc/init.d/bootvine` and add it to the
+`sysinit` runlevel:
+
+```sh
+bootvine install
+```
+
+`bootvine install` detects OpenRC from `/run/openrc/softlevel`; pass
+`--service-manager openrc` when staging with `--destdir`. OpenRC runs no
+service manager in the initramfs, so there is no initrd hook, and it has no
+password agent: when `dmcrypt` asks for a LUKS passphrase, bootvine steps aside
+to the console the prompt is on and returns once `dmcrypt` is done. Failed
+services show without a reason line, since OpenRC keeps no journal.
+
 ## Packaging
 
 `bootvine install --destdir <dir>` stages the files under `<dir>` instead of
@@ -117,7 +141,8 @@ the default `/usr`.
 ## Uninstall
 
 `bootvine uninstall` disables and removes everything `bootvine install` put in
-place, with the same `--prefix` and `--destdir`. The current initramfs keeps
+place, with the same `--prefix` and `--destdir`; on OpenRC it also runs
+`rc-update del bootvine sysinit`. The current initramfs keeps
 its copy of bootvine until you rebuild it, so with an initrd hook installed it
 prints the command for that: `sudo dracut --force`, or for mkinitcpio, removing
 `sd-bootvine` from `HOOKS` and running `sudo mkinitcpio -P`. On NixOS, remove

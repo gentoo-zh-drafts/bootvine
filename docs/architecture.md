@@ -376,20 +376,25 @@ demos have their own runtime that plays a script through the same messages.
 A command's result comes back as a message, such as `AskShellStarting`
 answered by `ShellQueryAnswered`.
 
-### Three crates
+### Four crates
 
 | Crate | Holds | Depends on |
 | --- | --- | --- |
-| `bootvine-screen` | the model, the view and the screen application: `Model`, `Message`, `Command`, `Subscription`, `update`, `view`, `subscriptions`; settings parsing | ratatui's core and widgets, serde, petgraph and other pure libraries |
-| `bootvine-systemd-link` | everything that knows systemd: the job feed over the private socket, journal lines, the password agent, status output, unit names and the vocabulary of milestones, display manager and shells | `bootvine-screen`, dbus, libsystemd, tokio, rustix |
-| `bootvine` | the live runtime, the console (virtual terminal, `/dev/vcs12`, printk, font, resume console), the screen loop, install and `main` | both |
+| `bootvine-screen` | the model, the view and the screen application: `Model`, `Message`, `Command`, `Subscription`, `update`, `view`, `subscriptions`; settings parsing; the `ServiceManager` trait | ratatui's core and widgets, serde, petgraph, `futures-core` and other pure libraries |
+| `bootvine-systemd-link` | `SystemdLink`: the job feed over the private socket, journal lines, the password agent, status output and the systemd vocabulary | `bootvine-screen`, dbus, libsystemd, tokio, rustix |
+| `bootvine-openrc-link` | `OpenrcLink`: service state from `/run/openrc`, the dependency cache and the OpenRC vocabulary | `bootvine-screen`, inotify, rustix |
+| `bootvine` | the live runtime, the console (virtual terminal, `/dev/vcs12`, printk, font, resume console), the screen loop, install and `main` | the screen crate and whichever link crates its features enable |
+
+Each link crate exports its link struct, its error type and its vocabulary;
+everything else is private, and `#![deny(unreachable_pub)]` keeps it so.
 
 The compiler keeps this shape:
 
 - **No effects in the screen.** `bootvine-screen` does not depend on tokio,
-  rustix, dbus, libsystemd, crossterm or futures, so it cannot call them. The
-  parts of std that touch the system (`std::fs`, `std::env`, `std::process`,
-  path metadata such as `Path::exists`, the wall clock) are caught by the
+  rustix, dbus, libsystemd, crossterm or futures, so it cannot call them.
+  `futures-core` only defines the `Stream` trait. The parts of std that touch
+  the system (`std::fs`, `std::env`, `std::process`, path metadata such as
+  `Path::exists`, the wall clock) are caught by the
   `screen-crate-without-effects` ast-grep rule. In its `lib.rs`,
   `#![forbid(unsafe_code)]` keeps out raw system calls, and printing or
   exiting is a lint error.
@@ -400,23 +405,65 @@ The compiler keeps this shape:
   also `Hash`, checked at compile time; closures and trait objects cannot
   meet that.
 
-### Other init systems
+### Service managers
 
-The screen knows no systemd names: the milestones, the display manager, the
-shell units and what takes over after shutdown come from a
-`ManagerVocabulary`, and each unit's kind and short name come with its facts.
-`bootvine` talks to the init system through a `ServiceManager` trait (job
-feed, password prompts, shell and display manager questions, status output);
-`SystemdManager` implements it on top of `bootvine-systemd-link`. Supporting
-another init system means a new link crate and a new implementation of the
-trait.
+One trait, `ServiceManager` in `bootvine-screen`, is everything the runtime
+asks of an init system. Each link crate implements it directly:
 
-Subscriptions wait on the kernel or on systemd rather than on timers:
+- **Streams** for what flows in: boot changes, password requests, console
+  prompts by other programs.
+- **Futures** for one-shot requests with an outcome: whether the boot is
+  still running, answering a password, whether a shell or the display manager
+  is starting, and keeping the init system's own status output quiet while the
+  screen runs.
+- **Plain calls** for what is known at once: the vocabulary, the starting
+  phase, whether a prompt shows right now.
+
+Errors are the link's own typed `Failure`; the boot stream carries
+`WatchFailure`, the screen's message for a lost feed. Nothing crosses the
+boundary boxed: the screen loop boxes once, when it stores a subscription's
+stream or a command's future next to the others.
+
+Commands that ask the init system something return `Performed::Later` with a
+future; the loop polls those beside the subscriptions and feeds their messages
+back to `update`. Console commands stay `Performed::Now`, so their effects keep
+their order.
+
+`bootvine` builds with the `systemd` feature by default and `openrc` on
+request. At start it detects the running manager (`/run/systemd/system`, then
+`/run/openrc/softlevel`) among the compiled-in links and runs the same generic
+code with it. A build for Alpine or Gentoo leaves out `systemd` and so links
+neither libdbus nor libsystemd.
+
+#### What OpenRC gives
+
+OpenRC keeps each service's state as a link in `/run/openrc/starting`,
+`started`, `stopping`, `inactive` or `failed`, the current runlevel in
+`softlevel`, and `rc.starting` while a runlevel change runs. inotify on those
+directories drives the feed; each change rereads them and diffs against the
+previous reading:
+
+- a service entering `starting` queues a job, and `started` or `failed`
+  finishes it;
+- `sysinit`, `boot` and `default` are targets whose dependencies are their
+  members in `/etc/runlevels` plus the runlevel before; `default` is the
+  root;
+- the boot finishes once `default` settles with nothing starting.
+
+Orderings come from the dependency cache `/run/openrc/deptree` (`need`, `use`,
+`want` and `after`). OpenRC has no journal, so failures carry no reason; no
+password agent, so bootvine answers no prompts; and no manager in the initrd.
+`dmcrypt` asks for LUKS passphrases on the console itself, so while it starts
+the screen steps aside to the previous virtual terminal and comes back
+afterwards.
+
+Subscriptions wait on the kernel or on the init system rather than on timers:
 
 | Subscription | Present | Woken by |
 | --- | --- | --- |
 | Boot feed | always | the bus socket becoming readable, or a failed unit's journal read finishing |
 | Password requests | system scope | inotify on `/run/systemd/ask-password` |
+| Console prompts | system scope | inotify on `/run/openrc` (OpenRC); never with systemd |
 | Abandonment of the shown prompt | while a prompt shows | the asker's pidfd becoming readable, or a timer until its `NotAfter` |
 | Terminal switches | always | `POLLPRI` on `/sys/class/tty/tty0/active` |
 | Console writes | always | `POLLPRI` on `/dev/vcs12` |

@@ -1,5 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
+use crate::screen_components::prompt::Passphrase;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PasswordRequest {
     pub file: PathBuf,
@@ -10,6 +12,12 @@ pub struct PasswordRequest {
     pub not_after: PromptDeadline,
     pub asker: PromptAsker,
     pub hint: RequestHint,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PasswordAnswer {
+    pub socket: PathBuf,
+    pub passphrase: Passphrase,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

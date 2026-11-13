@@ -1,7 +1,8 @@
 use std::{
-    fs::File,
+    fs::{self, File},
     io::{self, Read, Seek, SeekFrom},
     iter,
+    os::fd::AsRawFd,
     path::Path,
     rc::Rc,
     time::Duration,
@@ -10,12 +11,9 @@ use std::{
 use bootvine_screen::screen_components::{
     console_claim::MarkerPresence, passphrase_input::KeyPress, screen_application::Message,
 };
-use bootvine_systemd_link::{
-    descriptor_streams::{DirectoryChange, DirectoryWatch, items_when_readable, periodic_inputs},
-    link_error::Error,
-};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use futures::{Stream, StreamExt, future::ready, stream};
+use futures::{Stream, StreamExt, stream};
+use inotify::{Inotify, WatchMask};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::pread,
@@ -23,15 +21,18 @@ use rustix::{
 use tokio::{
     io::{Interest, unix::AsyncFd},
     signal::unix::{SignalKind, signal},
+    time::{MissedTickBehavior, interval},
 };
 use tracing::info;
 
-use crate::console_session::resume_console::{
-    RESUME_CONSOLE_DIRECTORY, RESUME_CONSOLE_MARKER, resume_console_is_open,
+use crate::console_session::{
+    resume_console::{RESUME_CONSOLE_DIRECTORY, RESUME_CONSOLE_MARKER, resume_console_is_open},
+    run_error::RunError,
 };
 
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const FOREGROUND_TERMINAL_STATE: &str = "/sys/class/tty/tty0/active";
+const INOTIFY_BUFFER: usize = 4096;
 
 fn rearm_attribute(attribute: &mut File) -> io::Result<String> {
     attribute.seek(SeekFrom::Start(0))?;
@@ -125,8 +126,26 @@ pub fn terminal_switch_inputs() -> impl Stream<Item = Message> {
     .left_stream()
 }
 
+fn directory_changes(directory: &str) -> io::Result<impl Stream<Item = ()>> {
+    fs::create_dir_all(directory)?;
+    let inotify = Inotify::init()?;
+    inotify.watches().add(
+        directory,
+        WatchMask::CLOSE_WRITE
+            | WatchMask::MOVED_TO
+            | WatchMask::MOVED_FROM
+            | WatchMask::DELETE
+            | WatchMask::ONLYDIR,
+    )?;
+    Ok(inotify
+        .into_event_stream([0_u8; INOTIFY_BUFFER])?
+        .map(|event| {
+            event.expect("reading inotify events succeeds");
+        }))
+}
+
 pub fn resume_marker_inputs() -> impl Stream<Item = Message> {
-    let watch = match DirectoryWatch::open(RESUME_CONSOLE_DIRECTORY) {
+    let changes = match directory_changes(RESUME_CONSOLE_DIRECTORY) {
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
             info!(
                 path = RESUME_CONSOLE_DIRECTORY,
@@ -136,10 +155,8 @@ pub fn resume_marker_inputs() -> impl Stream<Item = Message> {
         }
         opened => opened.expect("the resume console directory can be watched"),
     };
-    items_when_readable(watch, DirectoryWatch::changed)
-        .expect("the runtime accepts an inotify descriptor")
-        .filter(|change| ready(*change == DirectoryChange::Changed))
-        .map(|_| {
+    changes
+        .map(|()| {
             Message::ResumeMarker(
                 if resume_console_is_open(Path::new(RESUME_CONSOLE_MARKER)) {
                     MarkerPresence::Present
@@ -152,7 +169,23 @@ pub fn resume_marker_inputs() -> impl Stream<Item = Message> {
 }
 
 pub fn frame_inputs() -> impl Stream<Item = Message> {
-    periodic_inputs(FRAME_INTERVAL, || Message::Tick)
+    let mut ticks = interval(FRAME_INTERVAL);
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    stream::poll_fn(move |context| ticks.poll_tick(context).map(|_| Some(Message::Tick)))
+}
+
+fn items_when_readable<Source: AsRawFd, Item>(
+    source: Source,
+    read: impl Fn(&Source) -> Item,
+) -> io::Result<impl Stream<Item = Item>> {
+    let readiness = unsafe { AsyncFd::register_with_interest(source, Interest::READABLE) }?;
+    Ok(stream::poll_fn(move |context| {
+        readiness.poll_read_ready(context).map(|ready| {
+            let mut guard = ready.expect("the runtime keeps polling a registered descriptor");
+            guard.clear_ready();
+            Some(read(readiness.get_ref()))
+        })
+    }))
 }
 
 fn drain_terminal_events() -> io::Result<Vec<Event>> {
@@ -194,7 +227,7 @@ fn terminal_inputs(drained: io::Result<Vec<Event>>) -> Vec<Message> {
             .filter_map(key_press_of)
             .map(Message::KeyPressed)
             .collect(),
-        Err(error) => vec![Message::Failed(Error::from(error).into())],
+        Err(error) => vec![Message::Failed(RunError::from(error).into())],
     }
 }
 

@@ -1,7 +1,9 @@
 pub mod console_takeover;
 pub mod live_runtime;
+pub mod monotonic_clock;
 pub mod origin_reading;
 pub mod resume_console;
+pub mod run_error;
 pub mod saved_console_state;
 pub mod screen_loop;
 pub mod service_manager;

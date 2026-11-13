@@ -1,7 +1,7 @@
 use bootvine_screen::boot_model::ManagerVocabulary;
 
-pub const HANDOFF_UNIT: &str = "display-manager.service";
-pub const SHELL_UNITS: [&str; 2] = ["emergency.service", "rescue.service"];
+pub(crate) const HANDOFF_UNIT: &str = "display-manager.service";
+pub(crate) const SHELL_UNITS: [&str; 2] = ["emergency.service", "rescue.service"];
 const HOST_MILESTONES: [&str; 4] = [
     "sysinit.target",
     "basic.target",

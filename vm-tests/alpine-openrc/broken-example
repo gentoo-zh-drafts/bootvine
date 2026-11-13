@@ -1,0 +1,8 @@
+#!/sbin/openrc-run
+
+description="A service that always fails to start"
+
+start() {
+	ebegin "Starting a service that always fails"
+	eend 1
+}

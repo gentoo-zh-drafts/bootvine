@@ -38,6 +38,9 @@
             };
             rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
             craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+            muslCraneLib = (crane.mkLib pkgs).overrideToolchain (
+              rustToolchain.override { targets = [ "x86_64-unknown-linux-musl" ]; }
+            );
           in
           f {
             inherit
@@ -46,7 +49,14 @@
               craneLib
               rustToolchain
               ;
-            builds = import ./nix/crane-builds.nix { inherit lib pkgs craneLib; };
+            builds = import ./nix/crane-builds.nix {
+              inherit
+                lib
+                pkgs
+                craneLib
+                muslCraneLib
+                ;
+            };
           }
         );
 
@@ -163,11 +173,22 @@
       );
 
       checks = forEachSystem (
-        { pkgs, builds, ... }:
+        {
+          system,
+          pkgs,
+          builds,
+          ...
+        }:
         {
           inherit (builds) clippy-lints;
           bootvine-build = builds.bootvine;
           repo-tasks-build = builds.repo-tasks;
+        }
+        // lib.optionalAttrs (system == "x86_64-linux") {
+          alpine-openrc = import ./vm-tests/alpine-openrc/check.nix {
+            inherit lib pkgs;
+            staticBootvine = builds.bootvine-openrc-static;
+          };
         }
         // lib.mapAttrs' (machineName: check: lib.nameValuePair "vm-${machineName}" check) (
           vmTests.checksFor pkgs

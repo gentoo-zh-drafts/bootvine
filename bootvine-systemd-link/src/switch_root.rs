@@ -7,14 +7,14 @@ use rustix::{
 };
 
 const SYSROOT: &str = "/sysroot";
-pub const INITRD_RELEASE: &str = "/etc/initrd-release";
+pub(crate) const INITRD_RELEASE: &str = "/etc/initrd-release";
 
-pub struct Sysroot {
+pub(crate) struct Sysroot {
     directory: OwnedFd,
 }
 
 impl Sysroot {
-    pub fn hold() -> Result<Self, Errno> {
+    pub(crate) fn hold() -> Result<Self, Errno> {
         let directory = open(
             SYSROOT,
             OFlags::DIRECTORY | OFlags::RDONLY | OFlags::CLOEXEC,
@@ -23,7 +23,7 @@ impl Sysroot {
         Ok(Self { directory })
     }
 
-    pub fn enter(&self) -> Result<(), Errno> {
+    pub(crate) fn enter(&self) -> Result<(), Errno> {
         fchdir(&self.directory)?;
         chroot(".")?;
         chdir("/")

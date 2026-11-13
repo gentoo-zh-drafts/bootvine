@@ -14,7 +14,7 @@ use bootvine::{
     },
 };
 use bootvine_screen::{
-    boot_model::{RootRequest, Scope},
+    boot_model::{RootRequest, RunRequest, Scope},
     screen_settings::config_file::{Config, Timing, default_config_table},
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -25,7 +25,7 @@ use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::Subscr
 #[derive(Parser)]
 #[command(
     version,
-    about = "Live dependency tree of systemd jobs while the system boots",
+    about = "Live dependency tree of boot jobs under systemd or OpenRC",
     args_conflicts_with_subcommands = true
 )]
 struct Cli {
@@ -71,7 +71,8 @@ enum Command {
     #[command(about = "Exit with an error if a config file is unreadable or invalid")]
     Check(CheckOptions),
     #[command(
-        about = "Install this binary and the systemd units, and enable them; asks sudo when needed"
+        about = "Install this binary and the systemd units or OpenRC script, and enable them; \
+                 asks sudo when needed"
     )]
     Install(InstallOptions),
     #[command(about = "Disable and remove what install put in place")]
@@ -176,7 +177,11 @@ fn watch_boot(options: WatchOptions) -> ExitCode {
         } else {
             Scope::System
         },
-        shutdown: options.shutdown,
+        request: if options.shutdown {
+            RunRequest::Shutdown
+        } else {
+            RunRequest::Boot
+        },
         target: options
             .target
             .map_or(RootRequest::ManagerDefault, RootRequest::Named),

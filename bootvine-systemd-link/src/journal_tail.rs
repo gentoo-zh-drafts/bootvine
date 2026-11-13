@@ -32,7 +32,11 @@ struct UnitMessages {
     manager_reported: bool,
 }
 
-pub async fn settled_unit_messages(unit: String, wanted: usize, patience: Duration) -> Vec<String> {
+pub(crate) async fn settled_unit_messages(
+    unit: String,
+    wanted: usize,
+    patience: Duration,
+) -> Vec<String> {
     spawn_blocking(move || {
         read_settled_messages(&unit, wanted, Instant::now() + patience).unwrap_or_else(|error| {
             warn!(unit = %unit, error = %error, "could not read the journal of the unit");

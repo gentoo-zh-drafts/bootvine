@@ -4,7 +4,7 @@ use crate::boot_model::{RowStatus, TreeNode, TreeRow, UnitKind, flatten_forest};
 
 const MIN_FOLDED_LINKS: usize = 2;
 
-pub fn rows_within_height(forest: &[TreeNode], budget: usize) -> Vec<TreeRow> {
+pub(super) fn rows_within_height(forest: &[TreeNode], budget: usize) -> Vec<TreeRow> {
     [forest.to_vec(), fold_forest(forest.to_vec())]
         .into_iter()
         .map(flatten_forest)

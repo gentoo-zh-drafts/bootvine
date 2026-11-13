@@ -47,7 +47,7 @@ const AXIS_STEPS: [Duration; 12] = [
     Duration::from_hours(1),
 ];
 
-pub struct Timeline<'a> {
+pub(super) struct Timeline<'a> {
     pub origin: Duration,
     pub now: Duration,
     pub root_switches: Vec<Duration>,
@@ -58,7 +58,7 @@ pub struct Timeline<'a> {
     pub glyphs: &'a Glyphs,
 }
 
-pub struct RunningRun<'a> {
+pub(super) struct RunningRun<'a> {
     pub label: &'a str,
     pub queued_at: Duration,
     pub since: Duration,
@@ -70,7 +70,7 @@ fn label_and_bar_areas(area: Rect) -> [Rect; 2] {
     )
 }
 
-pub fn timeline_fits(area: Rect) -> bool {
+pub(super) fn timeline_fits(area: Rect) -> bool {
     let [_, bar_area] = label_and_bar_areas(area);
     bar_area.width >= ANNOTATION_COLUMN_WIDTH
 }
@@ -81,7 +81,7 @@ impl Timeline<'_> {
         reason = "a timeline taller than the terminal is cut by layout anyway, so the height caps \
                   at u16::MAX"
     )]
-    pub fn height(&self) -> u16 {
+    pub(super) fn height(&self) -> u16 {
         let entries = self.milestones.len()
             + self.finished.len().min(SLOWEST_RUNS_SHOWN)
             + self.running.len();

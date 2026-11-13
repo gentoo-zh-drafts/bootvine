@@ -24,6 +24,12 @@ git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
 
 [[package]]
+name = "bootvine-openrc-link"
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+
+[[package]]
 name = "bootvine-screen"
 changelog_update = false
 git_release_enable = false

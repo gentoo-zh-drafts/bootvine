@@ -19,7 +19,7 @@ use crate::{
     screen_settings::{color_scheme::FailureColors, font_glyphs::Glyphs},
 };
 
-pub struct FailurePanel<'a> {
+pub(super) struct FailurePanel<'a> {
     pub newest_first: Vec<&'a FailedUnit>,
     pub colors: &'a FailureColors,
     pub glyphs: &'a Glyphs,
@@ -38,7 +38,7 @@ impl FailurePanel<'_> {
         reason = "a panel taller than the terminal is cut by layout anyway, so the height caps at \
                   u16::MAX"
     )]
-    pub fn height(&self) -> u16 {
+    pub(super) fn height(&self) -> u16 {
         if self.newest_first.is_empty() {
             return 0;
         }

@@ -8,16 +8,16 @@ use std::{
     time::Duration,
 };
 
-use bootvine_screen::screen_components::{
-    password_request::{PasswordRequest, PromptAsker, PromptDeadline, RequestHint},
-    prompt::Passphrase,
-    screen_application::Message,
+use bootvine_screen::{
+    boot_model::ConsolePrompt,
+    screen_components::password_request::{
+        PasswordAnswer, PasswordRequest, PromptAsker, PromptDeadline, RequestHint,
+    },
 };
 use futures::{
-    StreamExt,
+    Stream, StreamExt,
     future::{ready, select},
     stream,
-    stream::LocalBoxStream,
 };
 use rustix::{
     io::Errno,
@@ -40,7 +40,7 @@ const REQUEST_PREFIX: &str = "ask.";
 const ASK_SECTION: &str = "[Ask]";
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum RequestFile {
+pub(crate) enum RequestFile {
     Pending(PasswordRequest),
     Withdrawn,
     Forbidden,
@@ -48,7 +48,7 @@ pub enum RequestFile {
 }
 
 #[must_use]
-pub fn parse_request(file: &Path, text: &str) -> RequestFile {
+pub(crate) fn parse_request(file: &Path, text: &str) -> RequestFile {
     let fields: Vec<(&str, &str)> = text
         .lines()
         .map(str::trim)
@@ -119,30 +119,30 @@ enum AskerWatch {
     NoAsker,
 }
 
-fn list_awaited_requests() -> Message {
-    Message::PasswordRequestsListed(awaited_requests())
-}
-
-pub fn password_request_inputs() -> LocalBoxStream<'static, Message> {
+pub(crate) fn password_request_stream() -> impl Stream<Item = Vec<PasswordRequest>> + 'static {
     let watch = match DirectoryWatch::open(REQUESTS) {
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
             info!("not allowed to watch password prompts, polling for them instead");
-            return periodic_inputs(BACKGROUND_CHECK_INTERVAL, list_awaited_requests).boxed_local();
+            return periodic_inputs(BACKGROUND_CHECK_INTERVAL, awaited_requests).right_stream();
         }
         watched => watched.expect("the password request directory can be watched"),
     };
     let changes = items_when_readable(watch, DirectoryWatch::changed)
         .expect("the runtime accepts an inotify descriptor")
         .filter(|change| ready(*change == DirectoryChange::Changed))
-        .map(|_| list_awaited_requests());
-    stream::once(ready(list_awaited_requests()))
+        .map(|_| awaited_requests());
+    stream::once(ready(awaited_requests()))
         .chain(changes)
-        .boxed_local()
+        .left_stream()
 }
 
 #[must_use]
-pub fn requested() -> bool {
-    !request_files().is_empty()
+pub(crate) fn console_prompt() -> ConsolePrompt {
+    if request_files().is_empty() {
+        ConsolePrompt::Absent
+    } else {
+        ConsolePrompt::Showing
+    }
 }
 
 fn request_files() -> Vec<PathBuf> {
@@ -194,7 +194,7 @@ fn status(request: &PasswordRequest) -> PromptStatus {
 }
 
 #[must_use]
-pub fn awaited_requests() -> Vec<PasswordRequest> {
+pub(crate) fn awaited_requests() -> Vec<PasswordRequest> {
     request_files()
         .iter()
         .filter_map(
@@ -207,7 +207,7 @@ pub fn awaited_requests() -> Vec<PasswordRequest> {
         .collect()
 }
 
-pub fn until_abandoned(
+pub(crate) fn until_abandoned(
     deadline: PromptDeadline,
     asker: PromptAsker,
 ) -> impl Future<Output = ()> + 'static {
@@ -256,12 +256,12 @@ pub fn until_abandoned(
     }
 }
 
-pub fn send_answer(socket: &Path, passphrase: &Passphrase) -> io::Result<()> {
-    let typed = passphrase.expose();
+pub(crate) fn send_answer(answer: &PasswordAnswer) -> io::Result<()> {
+    let typed = answer.passphrase.expose();
     let mut packet = Zeroizing::new(Vec::with_capacity(typed.len() + 1));
     packet.push(b'+');
     packet.extend_from_slice(typed.as_bytes());
-    UnixDatagram::unbound()?.send_to(&packet, socket)?;
+    UnixDatagram::unbound()?.send_to(&packet, &answer.socket)?;
     Ok(())
 }
 

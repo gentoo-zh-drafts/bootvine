@@ -34,6 +34,24 @@ pub enum Phase {
     Shutdown,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunRequest {
+    Boot,
+    Shutdown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootProgress {
+    InProgress,
+    Finished,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsolePrompt {
+    Showing,
+    Absent,
+}
+
 impl Phase {
     #[must_use]
     pub fn label(self) -> &'static str {

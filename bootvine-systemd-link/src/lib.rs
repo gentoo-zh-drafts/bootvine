@@ -1,10 +1,18 @@
-pub mod boot_feed;
-pub mod descriptor_streams;
+#![deny(unreachable_pub)]
+
+mod boot_feed;
+mod descriptor_streams;
 mod journal_tail;
-pub mod link_error;
-pub mod monotonic_clock;
-pub mod password_agent;
-pub mod switch_root;
-pub mod systemd_bus;
-pub mod systemd_names;
-pub mod systemd_vocabulary;
+mod link_error;
+mod monotonic_clock;
+mod password_agent;
+mod switch_root;
+mod systemd_bus;
+mod systemd_link;
+mod systemd_names;
+mod systemd_vocabulary;
+
+pub use crate::{
+    link_error::LinkError, systemd_link::SystemdLink, systemd_names::systemd_unit_facts,
+    systemd_vocabulary::systemd_vocabulary,
+};

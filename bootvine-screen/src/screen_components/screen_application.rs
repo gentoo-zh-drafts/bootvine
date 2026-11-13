@@ -3,7 +3,7 @@ use std::{fmt::Debug, hash::Hash, path::PathBuf, time::Duration};
 use tracing::info;
 
 use crate::{
-    boot_model::{BootChange, BootState, Scope, boot_origin::BootOrigin},
+    boot_model::{BootChange, BootState, ConsolePrompt, Scope, boot_origin::BootOrigin},
     boot_view::{BootProjection, BootView, ShellHandoverSummary, console_palette::ConsoleLook},
     screen_components::{
         console_claim::{
@@ -15,8 +15,8 @@ use crate::{
             shell_readiness,
         },
         passphrase_input::{KeyPress, asks_to_quit},
-        password_request::{PasswordRequest, PromptAsker, PromptDeadline},
-        prompt::{AnswerState, Passphrase, Prompt, TypedKey},
+        password_request::{PasswordAnswer, PasswordRequest, PromptAsker, PromptDeadline},
+        prompt::{AnswerState, Prompt, TypedKey},
     },
     screen_settings::{color_scheme::Colors, config_file::Timing},
 };
@@ -57,6 +57,7 @@ pub enum Message {
     Terminated,
     BootSourceEnded,
     Failed(WatchFailure),
+    ConsolePromptChanged(ConsolePrompt),
     Drawn,
 }
 
@@ -69,12 +70,12 @@ pub enum Command {
     ReadOrigin,
     SendAnswer {
         file: PathBuf,
-        socket: PathBuf,
-        passphrase: Passphrase,
+        answer: PasswordAnswer,
     },
     AskShellStarting,
     AskDisplayManagerState,
     StayInFront,
+    StepAside,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -83,6 +84,7 @@ pub enum Subscription {
     Keys,
     Termination,
     PasswordRequests,
+    ConsolePrompts,
     AbandonmentOf {
         file: PathBuf,
         deadline: PromptDeadline,
@@ -143,6 +145,7 @@ pub fn update(model: &mut Model, message: Message, now: Duration) -> Vec<Command
             model.console.request(Refresh::Repaint);
             Vec::new()
         }
+        Message::ConsolePromptChanged(prompt) => follow_console_prompt(model, prompt),
         Message::OriginRead(origin) => {
             model.origin = origin;
             Vec::new()
@@ -209,8 +212,10 @@ fn press_key(model: &mut Model, key: KeyPress) -> Vec<Command> {
             passphrase,
         } => vec![Command::SendAnswer {
             file: request.file,
-            socket: request.socket,
-            passphrase,
+            answer: PasswordAnswer {
+                socket: request.socket,
+                passphrase,
+            },
         }],
         TypedKey::Absorbed => Vec::new(),
     }
@@ -230,6 +235,18 @@ fn follow_requests(model: &mut Model, listed: Vec<PasswordRequest>) -> Vec<Comma
         vec![Command::TakeForeground]
     } else {
         Vec::new()
+    }
+}
+
+fn follow_console_prompt(model: &mut Model, prompt: ConsolePrompt) -> Vec<Command> {
+    match prompt {
+        ConsolePrompt::Showing if model.console.is_holding() => {
+            info!("another program is prompting on the console, stepping aside");
+            model.console.release();
+            vec![Command::StepAside]
+        }
+        ConsolePrompt::Absent if model.console.comes_forward(0) => vec![Command::TakeForeground],
+        ConsolePrompt::Showing | ConsolePrompt::Absent => Vec::new(),
     }
 }
 
@@ -347,6 +364,7 @@ pub fn subscriptions(model: &Model) -> Vec<Subscription> {
     ]
     .into_iter()
     .chain(system.then_some(Subscription::PasswordRequests))
+    .chain(system.then_some(Subscription::ConsolePrompts))
     .chain(system.then_some(Subscription::ResumeMarker))
     .chain(
         model
@@ -374,6 +392,7 @@ mod tests {
             console_claim::{Foreground, MarkerPresence},
             handover::LATE_FAILURES_PATIENCE,
             password_request::tests::cryptsetup_request,
+            prompt::Passphrase,
         },
     };
 
@@ -393,6 +412,36 @@ mod tests {
             ),
             handover: Handover::Watching,
         }
+    }
+
+    #[test]
+    fn a_console_prompt_by_another_program_sends_the_screen_behind_until_it_ends() {
+        let mut model = watching_model();
+        assert_eq!(
+            update(
+                &mut model,
+                Message::ConsolePromptChanged(ConsolePrompt::Showing),
+                MS
+            ),
+            vec![Command::StepAside]
+        );
+        assert!(!model.console.is_holding());
+        assert_eq!(
+            update(
+                &mut model,
+                Message::ConsolePromptChanged(ConsolePrompt::Showing),
+                MS
+            ),
+            Vec::new()
+        );
+        assert_eq!(
+            update(
+                &mut model,
+                Message::ConsolePromptChanged(ConsolePrompt::Absent),
+                MS
+            ),
+            vec![Command::TakeForeground]
+        );
     }
 
     fn shell_job_queued() -> Message {
@@ -536,8 +585,10 @@ mod tests {
             update(&mut model, press(KeyPress::Enter), MS),
             vec![Command::SendAnswer {
                 file: PathBuf::from("ask.x"),
-                socket: PathBuf::from("/run/systemd/ask-password/sck.1"),
-                passphrase: Passphrase::from("q"),
+                answer: PasswordAnswer {
+                    socket: PathBuf::from("/run/systemd/ask-password/sck.1"),
+                    passphrase: Passphrase::from("q"),
+                },
             }]
         );
         let _ = update(&mut model, press(KeyPress::Escape), MS);

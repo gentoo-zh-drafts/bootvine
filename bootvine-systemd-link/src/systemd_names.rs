@@ -3,7 +3,7 @@ use bootvine_screen::boot_model::{
 };
 
 #[must_use]
-pub fn active_state_from(text: &str) -> ActiveState {
+pub(crate) fn active_state_from(text: &str) -> ActiveState {
     match text {
         "activating" => ActiveState::Activating,
         "active" => ActiveState::Active,
@@ -15,7 +15,7 @@ pub fn active_state_from(text: &str) -> ActiveState {
 }
 
 #[must_use]
-pub fn job_result_from(text: &str) -> JobResult {
+pub(crate) fn job_result_from(text: &str) -> JobResult {
     match text {
         "done" => JobResult::Done,
         "skipped" => JobResult::Skipped,
@@ -28,7 +28,7 @@ pub fn job_result_from(text: &str) -> JobResult {
 }
 
 #[must_use]
-pub fn job_kind_from(text: &str) -> JobKind {
+pub(crate) fn job_kind_from(text: &str) -> JobKind {
     match text {
         "stop" => JobKind::TakesDown,
         _ => JobKind::BringsUp,
@@ -36,7 +36,7 @@ pub fn job_kind_from(text: &str) -> JobKind {
 }
 
 #[must_use]
-pub fn unit_kind_of(name: &str) -> UnitKind {
+pub(crate) fn unit_kind_of(name: &str) -> UnitKind {
     match name.rsplit_once('.').map(|(_, suffix)| suffix) {
         Some("service") => UnitKind::Service,
         Some("target") => UnitKind::Target,
@@ -54,7 +54,7 @@ pub fn unit_kind_of(name: &str) -> UnitKind {
 }
 
 #[must_use]
-pub fn short_unit_name(name: &str) -> String {
+pub(crate) fn short_unit_name(name: &str) -> String {
     match unit_kind_of(name) {
         UnitKind::Target | UnitKind::Other => name.to_owned(),
         _ => name

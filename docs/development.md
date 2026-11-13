@@ -5,15 +5,18 @@
 | Folder | Holds |
 | --- | --- |
 | `bootvine/` | the published crate: the live runtime, the console, the `bootvine` binary and the unit and initrd files it installs |
-| `bootvine-screen/` | the screen as data and pure functions: model, messages, commands, subscriptions, update and view; not published |
-| `bootvine-systemd-link/` | the systemd side: job feed, journal, password agent and vocabulary; not published |
+| `bootvine-screen/` | the screen as data and pure functions: model, messages, commands, subscriptions, update and view, and the `ServiceManager` trait |
+| `bootvine-systemd-link/` | `SystemdLink`, the systemd side: job feed, journal, password agent and vocabulary |
+| `bootvine-openrc-link/` | `OpenrcLink`, the OpenRC side: service states under `/run/openrc`, the dependency cache and vocabulary |
 | `scripted-demos/` | the scripted boot, shutdown and passphrase demos, and the VHS tapes that record them |
 | `xtask/` | repository tasks run with `cargo xtask` |
-| `vm-tests/` | the sample NixOS machines, one folder each with its VM check |
+| `vm-tests/` | the sample NixOS machines, one folder each with its VM check, and `alpine-openrc/`, which boots Alpine with a static OpenRC build |
 | `nix/` | the crane builds and the NixOS module |
 | `recordings/` | ignored output of `record-screencasts`: the scripted demo GIFs and the sample machine WebP recordings, published on the `recordings` branch for the README and the [guide](guide.md) |
 
-`cargo build` and `cargo test` act on every crate. `cargo run` needs the binary:
+`cargo build` and `cargo test` act on every crate. `bootvine` builds the
+`systemd` link by default; add `--features openrc` for both, or
+`--no-default-features --features openrc` for OpenRC alone. `cargo run` needs the binary:
 `--bin bootvine`, `--bin scripted-boot` and so on.
 
 ## Setup

@@ -9,11 +9,11 @@ use crate::{
     screen_settings::{color_scheme::Colors, config_file::Timing, font_glyphs::Glyphs},
 };
 
-pub fn render(state: &BootState, now: Duration, width: u16, height: u16) -> Vec<String> {
+pub(super) fn render(state: &BootState, now: Duration, width: u16, height: u16) -> Vec<String> {
     screen_lines(&render_prompted(state, now, width, height, None))
 }
 
-pub fn render_prompted(
+pub(super) fn render_prompted(
     state: &BootState,
     now: Duration,
     width: u16,
@@ -43,7 +43,7 @@ pub fn render_prompted(
     terminal.backend().buffer().clone()
 }
 
-pub fn ryzen_origin() -> BootOrigin {
+pub(super) fn ryzen_origin() -> BootOrigin {
     BootOrigin {
         host: "ryzen".to_owned(),
         system: Some("NixOS 26.11".to_owned()),
@@ -52,7 +52,7 @@ pub fn ryzen_origin() -> BootOrigin {
     }
 }
 
-pub fn screen_lines(buffer: &Buffer) -> Vec<String> {
+pub(super) fn screen_lines(buffer: &Buffer) -> Vec<String> {
     let area = buffer.area;
     (0..area.height)
         .map(|y| {
@@ -64,7 +64,7 @@ pub fn screen_lines(buffer: &Buffer) -> Vec<String> {
         .collect()
 }
 
-pub fn boot_in_progress() -> BootState {
+pub(super) fn boot_in_progress() -> BootState {
     let mut state = queued_boot(
         Phase::Host,
         1000 * MS,
@@ -88,7 +88,7 @@ pub fn boot_in_progress() -> BootState {
     state
 }
 
-pub fn chain_boot() -> BootState {
+pub(super) fn chain_boot() -> BootState {
     queued_boot(
         Phase::Host,
         Duration::ZERO,
@@ -103,7 +103,7 @@ pub fn chain_boot() -> BootState {
     )
 }
 
-pub fn described_boot() -> BootState {
+pub(super) fn described_boot() -> BootState {
     queued_boot(
         Phase::Host,
         Duration::ZERO,

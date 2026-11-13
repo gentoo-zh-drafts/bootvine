@@ -2,6 +2,7 @@
   lib,
   pkgs,
   craneLib,
+  muslCraneLib,
 }:
 let
   bootvineCrate = craneLib.crateNameFromCargoToml { cargoToml = ../bootvine/Cargo.toml; };
@@ -63,6 +64,16 @@ in
       platforms = lib.platforms.linux;
       license = lib.getLicenseFromSpdxId (lib.importTOML ../bootvine/Cargo.toml).package.license;
     };
+  };
+
+  bootvine-openrc-static = muslCraneLib.buildPackage {
+    inherit (commonArgs) src strictDeps;
+    pname = "bootvine-openrc-static";
+    inherit (bootvineCrate) version;
+    CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+    CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+    cargoExtraArgs = "-p bootvine --no-default-features --features openrc";
+    doCheck = false;
   };
 
   scripted-demos = buildWorkspaceMember {

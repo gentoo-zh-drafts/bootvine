@@ -8,4 +8,6 @@ pub enum InstallError {
     Spawn { program: String, source: io::Error },
     #[error("{program} failed: {status}")]
     Failed { program: String, status: ExitStatus },
+    #[error("initramfs hooks exist only for systemd; drop --initrd when installing for OpenRC")]
+    InitrdNeedsSystemd,
 }

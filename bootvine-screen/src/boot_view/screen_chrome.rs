@@ -31,7 +31,7 @@ use crate::{
 const SEPARATOR: &str = " · ";
 const REJECTED_PASSPHRASE: &str = "Wrong passphrase, try again";
 
-pub struct Header<'a> {
+pub(super) struct Header<'a> {
     pub origin: &'a BootOrigin,
     pub total: Option<Duration>,
     pub colors: &'a HeaderColors,
@@ -72,7 +72,7 @@ impl Widget for Header<'_> {
     }
 }
 
-pub struct Footer<'a> {
+pub(super) struct Footer<'a> {
     pub tally: Tally,
     pub colors: &'a FooterColors,
     pub glyphs: &'a Glyphs,
@@ -108,7 +108,7 @@ pub struct PasswordPrompt<'a> {
     pub rejected: bool,
 }
 
-pub struct PasswordPopup<'a> {
+pub(super) struct PasswordPopup<'a> {
     pub asking: &'a PasswordPrompt<'a>,
     pub colors: &'a PasswordColors,
     pub glyphs: &'a Glyphs,

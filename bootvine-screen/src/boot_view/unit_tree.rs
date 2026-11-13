@@ -34,7 +34,7 @@ struct RunTimeout {
     exceeded: bool,
 }
 
-pub struct UnitTree<'a> {
+pub(super) struct UnitTree<'a> {
     pub phase: Line<'static>,
     pub rows: &'a [TreeRow],
     pub hidden: usize,
@@ -106,13 +106,13 @@ impl UnitTree<'_> {
         reason = "a tree taller than the terminal is cut by layout anyway, so the height caps at \
                   u16::MAX"
     )]
-    pub fn height_of(rows: usize, hidden: usize) -> u16 {
+    pub(super) fn height_of(rows: usize, hidden: usize) -> u16 {
         u16::try_from(rows + usize::from(hidden > 0))
             .unwrap_or(u16::MAX)
             .saturating_add(TEXT_ROW_HEIGHT)
     }
 
-    pub fn height(&self) -> u16 {
+    pub(super) fn height(&self) -> u16 {
         Self::height_of(self.rows.len(), self.hidden)
     }
 

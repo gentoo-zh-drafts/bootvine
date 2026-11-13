@@ -7,7 +7,9 @@ use std::{
 };
 
 use bootvine_screen::{
-    boot_model::{Activity, JobKind, JobResult, Scope, UnitFacts, UnitKind, UnitTimeouts},
+    boot_model::{
+        Activity, BootProgress, JobKind, JobResult, Scope, UnitFacts, UnitKind, UnitTimeouts,
+    },
     screen_components::handover::StatusRelease,
 };
 use dbus::{
@@ -26,11 +28,10 @@ use tracing::error;
 
 use crate::{
     descriptor_streams::{CarriedItem, readable_source, unfold_carrying},
-    link_error::Error,
+    link_error::{LinkError, LinkFailure},
     systemd_names::{
         active_state_from, job_kind_from, job_result_from, systemd_unit_facts, unit_kind_of,
     },
-    systemd_vocabulary::{HANDOFF_UNIT, SHELL_UNITS},
 };
 
 const DESTINATION: &str = "org.freedesktop.systemd1";
@@ -55,12 +56,12 @@ const STATUS_RESET_MODE: &str = "";
 const NO_SUCH_UNIT: &str = "org.freedesktop.systemd1.NoSuchUnit";
 const UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
 
-pub enum SignalBatch {
+pub(crate) enum SignalBatch {
     Open(Vec<Signal>),
     Closed(Vec<Signal>),
 }
 
-pub enum Signal {
+pub(crate) enum Signal {
     JobNew {
         id: u32,
         job: Path<'static>,
@@ -78,13 +79,13 @@ pub enum Signal {
     BootFinished,
 }
 
-pub struct FetchedUnit {
-    pub path: Path<'static>,
-    pub facts: UnitFacts,
-    pub activity: Activity,
+pub(crate) struct FetchedUnit {
+    pub(crate) path: Path<'static>,
+    pub(crate) facts: UnitFacts,
+    pub(crate) activity: Activity,
 }
 
-pub enum UnitLookup {
+pub(crate) enum UnitLookup {
     Loaded(Box<FetchedUnit>),
     NotLoaded,
 }
@@ -94,10 +95,10 @@ enum BusMessage {
     Unrelated,
 }
 
-pub struct JobListing {
-    pub id: u32,
-    pub unit: String,
-    pub kind: JobKind,
+pub(crate) struct JobListing {
+    pub(crate) id: u32,
+    pub(crate) unit: String,
+    pub(crate) kind: JobKind,
 }
 
 type ListedJob = (u32, String, String, String, Path<'static>, Path<'static>);
@@ -112,7 +113,7 @@ impl From<ListedJob> for JobListing {
     }
 }
 
-pub struct Session {
+pub(crate) struct Session {
     channel: Channel,
     peer_to_peer: bool,
 }
@@ -123,15 +124,15 @@ fn method_call(
     interface: &str,
     member: &str,
     arguments: impl AppendAll,
-) -> Result<Message, Error> {
+) -> Result<Message, LinkFailure> {
     let Ok(mut call) = Message::new_method_call(destination, path, interface, member) else {
-        return Err(Error::MalformedCall);
+        return Err(LinkFailure::MalformedCall);
     };
     call.append_all(arguments);
     Ok(call)
 }
 
-fn manager_call(member: &str, arguments: impl AppendAll) -> Result<Message, Error> {
+fn manager_call(member: &str, arguments: impl AppendAll) -> Result<Message, LinkFailure> {
     method_call(
         DESTINATION,
         MANAGER_PATH,
@@ -141,7 +142,7 @@ fn manager_call(member: &str, arguments: impl AppendAll) -> Result<Message, Erro
     )
 }
 
-fn property_call(path: &str, interface: &str, property: &str) -> Result<Message, Error> {
+fn property_call(path: &str, interface: &str, property: &str) -> Result<Message, LinkFailure> {
     method_call(
         DESTINATION,
         path,
@@ -151,19 +152,22 @@ fn property_call(path: &str, interface: &str, property: &str) -> Result<Message,
     )
 }
 
-fn boot_in_progress_call() -> Result<Message, Error> {
+fn boot_progress_call() -> Result<Message, LinkFailure> {
     property_call(MANAGER_PATH, MANAGER_INTERFACE, "FinishTimestampMonotonic")
 }
 
-fn read_boot_in_progress(reply: &Message) -> Result<bool, Error> {
+fn read_boot_progress(reply: &Message) -> Result<BootProgress, LinkFailure> {
     let finished: Variant<u64> = reply.read1()?;
-    Ok(finished.0 == 0)
+    Ok(match finished.0 {
+        0 => BootProgress::InProgress,
+        _ => BootProgress::Finished,
+    })
 }
 
-async fn boot_finish_or_lost_connection() -> Result<(), Error> {
+async fn boot_finish_or_lost_connection() -> Result<(), LinkFailure> {
     let mut connection = BusConnection::register(Session::open(Scope::System)?)?;
     connection.subscribe().await?;
-    if connection.boot_in_progress().await? {
+    if connection.boot_progress().await? == BootProgress::InProgress {
         connection
             .into_signals()
             .any(|signal| ready(matches!(signal, Signal::BootFinished)))
@@ -181,23 +185,23 @@ async fn termination_request(listener: io::Result<OsSignal>) {
     }
 }
 
-pub async fn restore_status_after_watch(
-    watch: impl Future<Output = Result<StatusRelease, Error>>,
-) -> Result<(), Error> {
+pub(crate) async fn restore_status_after_watch<Failure: From<LinkError>>(
+    watch: impl Future<Output = Result<StatusRelease, Failure>>,
+) -> Result<(), Failure> {
     let silenced_status = SilencedStatus;
     let terminated = termination_request(signal(SignalKind::terminate()));
     let watched = watch.await;
     if !matches!(watched, Ok(StatusRelease::Immediately)) {
         select(pin!(terminated), pin!(boot_finish_or_lost_connection())).await;
     }
-    silenced_status.restore()?;
+    silenced_status.restore().map_err(LinkError::from)?;
     watched.map(drop)
 }
 
 struct SilencedStatus;
 
 impl SilencedStatus {
-    fn restore(self) -> Result<(), Error> {
+    fn restore(self) -> Result<(), LinkFailure> {
         mem::forget(self);
         Session::open(Scope::System)?.restore_configured_status()
     }
@@ -219,7 +223,7 @@ impl Drop for SilencedStatus {
 }
 
 impl Session {
-    pub fn open(scope: Scope) -> Result<Self, Error> {
+    pub(crate) fn open(scope: Scope) -> Result<Self, LinkFailure> {
         if scope == Scope::System
             && let Ok(channel) = Channel::open_private(PRIVATE_SOCKET)
         {
@@ -250,47 +254,20 @@ impl Session {
         }
     }
 
-    fn blocking_call(&self, call: Message) -> Result<Message, Error> {
+    fn blocking_call(&self, call: Message) -> Result<Message, LinkFailure> {
         Ok(self.channel.send_with_reply_and_block(call, CALL_TIMEOUT)?)
     }
 
-    pub fn restore_configured_status(&self) -> Result<(), Error> {
+    pub(crate) fn restore_configured_status(&self) -> Result<(), LinkFailure> {
         self.blocking_call(manager_call("SetShowStatus", (STATUS_RESET_MODE,))?)?;
         Ok(())
     }
 
-    pub fn boot_in_progress(&self) -> Result<bool, Error> {
-        read_boot_in_progress(&self.blocking_call(boot_in_progress_call()?)?)
-    }
-
-    pub fn display_manager_running(&self) -> Result<bool, Error> {
-        let path: Path<'static> =
-            match self.blocking_call(manager_call("GetUnit", (HANDOFF_UNIT,))?) {
-                Err(Error::Bus(bus_error)) if bus_error.name() == Some(NO_SUCH_UNIT) => {
-                    return Ok(false);
-                }
-                answered => answered?.read1()?,
-            };
-        let state: Variant<String> = self
-            .blocking_call(property_call(&path, UNIT_INTERFACE, "ActiveState")?)?
-            .read1()?;
-        Ok(matches!(
-            state.0.as_str(),
-            "active" | "activating" | "reloading"
-        ))
-    }
-
-    pub fn shell_is_starting(&self) -> Result<bool, Error> {
-        let reply = self.blocking_call(manager_call("ListJobs", ())?)?;
-        let listed: Vec<ListedJob> = reply.read1()?;
-        Ok(listed
-            .into_iter()
-            .map(JobListing::from)
-            .any(|job| job.kind == JobKind::BringsUp && SHELL_UNITS.contains(&job.unit.as_str())))
-    }
-
-    fn send(&self, call: Message) -> Result<u32, Error> {
-        let serial = self.channel.send(call).map_err(|()| Error::Disconnected)?;
+    fn send(&self, call: Message) -> Result<u32, LinkFailure> {
+        let serial = self
+            .channel
+            .send(call)
+            .map_err(|()| LinkFailure::Disconnected)?;
         self.channel.flush();
         Ok(serial)
     }
@@ -311,13 +288,13 @@ impl Session {
     }
 }
 
-pub struct BusConnection {
+pub(crate) struct BusConnection {
     session: AsyncFd<Session>,
     early_signals: Vec<Signal>,
 }
 
 impl BusConnection {
-    pub fn register(session: Session) -> io::Result<Self> {
+    pub(crate) fn register(session: Session) -> io::Result<Self> {
         Ok(Self {
             session: readable_source(session)?,
             early_signals: Vec::new(),
@@ -325,11 +302,11 @@ impl BusConnection {
     }
 
     #[must_use]
-    pub fn peer_to_peer(&self) -> bool {
+    pub(crate) fn peer_to_peer(&self) -> bool {
         self.session.get_ref().peer_to_peer
     }
 
-    fn drain_replies(&mut self) -> Result<Vec<Message>, Error> {
+    fn drain_replies(&mut self) -> Result<Vec<Message>, LinkFailure> {
         let session = self.session.get_ref();
         let (signals, replies): (Vec<Message>, Vec<Message>) = session
             .arrived_messages()
@@ -347,11 +324,11 @@ impl BusConnection {
         if session.channel.is_connected() {
             Ok(replies)
         } else {
-            Err(Error::Disconnected)
+            Err(LinkFailure::Disconnected)
         }
     }
 
-    async fn next_replies(&mut self) -> Result<Vec<Message>, Error> {
+    async fn next_replies(&mut self) -> Result<Vec<Message>, LinkFailure> {
         let drained = self.drain_replies()?;
         if !drained.is_empty() {
             return Ok(drained);
@@ -360,7 +337,7 @@ impl BusConnection {
         self.drain_replies()
     }
 
-    async fn reply_to(&mut self, serial: u32) -> Result<Message, Error> {
+    async fn reply_to(&mut self, serial: u32) -> Result<Message, LinkFailure> {
         let mut replies = pin!(
             unfold_carrying(self, |connection| async move {
                 let replies = connection.next_replies().await;
@@ -369,55 +346,55 @@ impl BusConnection {
                     state: connection,
                 })
             })
-            .map_ok(|replies| stream::iter(replies.into_iter().map(Ok::<_, Error>)))
+            .map_ok(|replies| stream::iter(replies.into_iter().map(Ok::<_, LinkFailure>)))
             .try_flatten()
             .try_filter(|reply| ready(reply.get_reply_serial() == Some(serial)))
         );
-        replies.try_next().await?.ok_or(Error::Disconnected)
+        replies.try_next().await?.ok_or(LinkFailure::Disconnected)
     }
 
-    async fn call(&mut self, call: Message) -> Result<Message, Error> {
+    async fn call(&mut self, call: Message) -> Result<Message, LinkFailure> {
         let serial = self.session.get_ref().send(call)?;
         let Ok(reply) = timeout(CALL_TIMEOUT, self.reply_to(serial)).await else {
-            return Err(Error::CallTimedOut);
+            return Err(LinkFailure::CallTimedOut);
         };
         let mut reply = reply?;
         reply.as_result()?;
         Ok(reply)
     }
 
-    pub async fn subscribe(&mut self) -> Result<(), Error> {
+    pub(crate) async fn subscribe(&mut self) -> Result<(), LinkFailure> {
         self.call(manager_call("Subscribe", ())?).await?;
         Ok(())
     }
 
-    pub async fn silence_status_output(&mut self) -> Result<(), Error> {
+    pub(crate) async fn silence_status_output(&mut self) -> Result<(), LinkFailure> {
         self.call(manager_call("SetShowStatus", (STATUS_SILENT_MODE,))?)
             .await?;
         Ok(())
     }
 
-    pub async fn default_target(&mut self) -> Result<String, Error> {
+    pub(crate) async fn default_target(&mut self) -> Result<String, LinkFailure> {
         let reply = self.call(manager_call("GetDefaultTarget", ())?).await?;
         Ok(reply.read1()?)
     }
 
-    pub async fn boot_in_progress(&mut self) -> Result<bool, Error> {
-        read_boot_in_progress(&self.call(boot_in_progress_call()?).await?)
+    pub(crate) async fn boot_progress(&mut self) -> Result<BootProgress, LinkFailure> {
+        read_boot_progress(&self.call(boot_progress_call()?).await?)
     }
 
-    pub async fn list_jobs(&mut self) -> Result<Vec<JobListing>, Error> {
+    pub(crate) async fn list_jobs(&mut self) -> Result<Vec<JobListing>, LinkFailure> {
         let reply = self.call(manager_call("ListJobs", ())?).await?;
         let listed: Vec<ListedJob> = reply.read1()?;
         Ok(listed.into_iter().map(JobListing::from).collect())
     }
 
-    pub async fn job_kind(&mut self, job: &Path<'_>) -> Result<JobKind, Error> {
+    pub(crate) async fn job_kind(&mut self, job: &Path<'_>) -> Result<JobKind, LinkFailure> {
         let reply = match self
             .call(property_call(job, JOB_INTERFACE, "JobType")?)
             .await
         {
-            Err(Error::Bus(bus_error)) if bus_error.name() == Some(UNKNOWN_OBJECT) => {
+            Err(LinkFailure::Bus(bus_error)) if bus_error.name() == Some(UNKNOWN_OBJECT) => {
                 return Ok(JobKind::Unknown);
             }
             answered => answered?,
@@ -426,9 +403,9 @@ impl BusConnection {
         Ok(job_kind_from(&kind.0))
     }
 
-    pub async fn fetch_unit(&mut self, name: &str) -> Result<UnitLookup, Error> {
+    pub(crate) async fn fetch_unit(&mut self, name: &str) -> Result<UnitLookup, LinkFailure> {
         let path: Path<'static> = match self.call(manager_call("GetUnit", (name,))?).await {
-            Err(Error::Bus(bus_error)) if bus_error.name() == Some(NO_SUCH_UNIT) => {
+            Err(LinkFailure::Bus(bus_error)) if bus_error.name() == Some(NO_SUCH_UNIT) => {
                 return Ok(UnitLookup::NotLoaded);
             }
             answered => answered?.read1()?,
@@ -436,7 +413,7 @@ impl BusConnection {
         self.lookup_at(name, path).await
     }
 
-    pub async fn load_unit(&mut self, name: &str) -> Result<UnitLookup, Error> {
+    pub(crate) async fn load_unit(&mut self, name: &str) -> Result<UnitLookup, LinkFailure> {
         let path: Path<'static> = self
             .call(manager_call("LoadUnit", (name,))?)
             .await?
@@ -444,16 +421,24 @@ impl BusConnection {
         self.lookup_at(name, path).await
     }
 
-    async fn lookup_at(&mut self, name: &str, path: Path<'static>) -> Result<UnitLookup, Error> {
+    async fn lookup_at(
+        &mut self,
+        name: &str,
+        path: Path<'static>,
+    ) -> Result<UnitLookup, LinkFailure> {
         match self.unit_at(name, path).await {
-            Err(Error::Bus(bus_error)) if bus_error.name() == Some(UNKNOWN_OBJECT) => {
+            Err(LinkFailure::Bus(bus_error)) if bus_error.name() == Some(UNKNOWN_OBJECT) => {
                 Ok(UnitLookup::NotLoaded)
             }
             fetched => Ok(UnitLookup::Loaded(Box::new(fetched?))),
         }
     }
 
-    async fn unit_at(&mut self, name: &str, path: Path<'static>) -> Result<FetchedUnit, Error> {
+    async fn unit_at(
+        &mut self,
+        name: &str,
+        path: Path<'static>,
+    ) -> Result<FetchedUnit, LinkFailure> {
         let properties = self.all_properties(&path, UNIT_INTERFACE).await?;
         let kind_properties = match kind_interface(unit_kind_of(&unit_id(name, &properties))) {
             Some(interface) => self.all_properties(&path, interface).await?,
@@ -466,25 +451,32 @@ impl BusConnection {
         })
     }
 
-    pub async fn failure_reason(&mut self, name: &str) -> Result<FailureReason, Error> {
+    pub(crate) async fn failure_reason(
+        &mut self,
+        name: &str,
+    ) -> Result<FailureReason, LinkFailure> {
         let Some(interface) = kind_interface(unit_kind_of(name)) else {
             return Ok(FailureReason::Unexplained);
         };
         let path: Path<'static> = match self.call(manager_call("GetUnit", (name,))?).await {
-            Err(Error::Bus(bus_error)) if bus_error.name() == Some(NO_SUCH_UNIT) => {
+            Err(LinkFailure::Bus(bus_error)) if bus_error.name() == Some(NO_SUCH_UNIT) => {
                 return Ok(FailureReason::Unexplained);
             }
             answered => answered?.read1()?,
         };
         match self.all_properties(&path, interface).await {
-            Err(Error::Bus(bus_error)) if bus_error.name() == Some(UNKNOWN_OBJECT) => {
+            Err(LinkFailure::Bus(bus_error)) if bus_error.name() == Some(UNKNOWN_OBJECT) => {
                 Ok(FailureReason::Unexplained)
             }
             properties => Ok(FailureReason::from(&properties?)),
         }
     }
 
-    async fn all_properties(&mut self, path: &Path<'_>, interface: &str) -> Result<PropMap, Error> {
+    async fn all_properties(
+        &mut self,
+        path: &Path<'_>,
+        interface: &str,
+    ) -> Result<PropMap, LinkFailure> {
         Ok(self
             .call(method_call(
                 DESTINATION,
@@ -497,7 +489,7 @@ impl BusConnection {
             .read1()?)
     }
 
-    pub async fn wait_for_signals(&self) {
+    pub(crate) async fn wait_for_signals(&self) {
         if self.early_signals.is_empty()
             && let Ok(mut readiness) = self.session.readable().await
         {
@@ -505,7 +497,7 @@ impl BusConnection {
         }
     }
 
-    pub fn take_signals(&mut self) -> SignalBatch {
+    pub(crate) fn take_signals(&mut self) -> SignalBatch {
         let still_connected = self.drain_replies().is_ok();
         let signals = mem::take(&mut self.early_signals);
         if still_connected {
@@ -567,7 +559,7 @@ fn signal_name(number: i64) -> String {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum FailureReason {
+pub(crate) enum FailureReason {
     Explained(String),
     Unexplained,
 }
@@ -675,7 +667,7 @@ impl AsFd for Session {
     }
 }
 
-fn authentication_carrier() -> Result<Message, Error> {
+fn authentication_carrier() -> Result<Message, LinkFailure> {
     let mut ping = method_call(DESTINATION, MANAGER_PATH, PEER_INTERFACE, "Ping", ())?;
     ping.set_no_reply(true);
     Ok(ping)

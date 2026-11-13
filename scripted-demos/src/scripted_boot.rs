@@ -10,7 +10,9 @@ use std::{
 };
 
 use bootvine::console_session::{
-    screen_loop::{ScreenRuntime, run_screen},
+    monotonic_clock::monotonic_now,
+    run_error::RunError,
+    screen_loop::{Performed, ScreenRuntime, run_screen},
     stream_sources::{frame_inputs, key_inputs},
 };
 use bootvine_screen::{
@@ -28,10 +30,7 @@ use bootvine_screen::{
     },
     screen_settings::{color_scheme::Colors, config_file::Timing},
 };
-use bootvine_systemd_link::{
-    link_error::Error, monotonic_clock::monotonic_now, systemd_names::systemd_unit_facts,
-    systemd_vocabulary::systemd_vocabulary,
-};
+use bootvine_systemd_link::{systemd_unit_facts, systemd_vocabulary};
 use futures::{FutureExt, StreamExt, stream, stream::LocalBoxStream};
 use ratatui::DefaultTerminal;
 use tokio::{
@@ -451,14 +450,12 @@ fn demo_now(epoch: Duration) -> Duration {
 }
 
 impl ScreenRuntime for DemoRuntime {
-    fn perform(&mut self, command: Command) -> Vec<Message> {
-        match command {
-            Command::SendAnswer {
-                file, passphrase, ..
-            } => {
+    fn perform(&mut self, command: Command) -> Performed {
+        Performed::Now(match command {
+            Command::SendAnswer { file, answer } => {
                 let mut boot = self.boot.borrow_mut();
                 boot.script
-                    .answer(passphrase.expose(), demo_now(self.epoch));
+                    .answer(answer.passphrase.expose(), demo_now(self.epoch));
                 boot.rejection_reported = false;
                 vec![Message::AnswerDelivered(file)]
             }
@@ -469,8 +466,9 @@ impl ScreenRuntime for DemoRuntime {
             | Command::InspectConsole
             | Command::AskShellStarting
             | Command::AskDisplayManagerState
-            | Command::StayInFront => Vec::new(),
-        }
+            | Command::StayInFront
+            | Command::StepAside => Vec::new(),
+        })
     }
 
     fn subscribe(&mut self, subscription: &Subscription) -> LocalBoxStream<'static, Message> {
@@ -486,7 +484,7 @@ impl ScreenRuntime for DemoRuntime {
             Subscription::Keys => match key_inputs() {
                 Ok(keys) => keys.boxed_local(),
                 Err(error) => {
-                    stream::once(async move { Message::Failed(Error::from(error).into()) })
+                    stream::once(async move { Message::Failed(RunError::from(error).into()) })
                         .boxed_local()
                 }
             },
@@ -499,6 +497,7 @@ impl ScreenRuntime for DemoRuntime {
             }
             Subscription::Termination
             | Subscription::PasswordRequests
+            | Subscription::ConsolePrompts
             | Subscription::AbandonmentOf { .. }
             | Subscription::TerminalSwitches
             | Subscription::ResumeMarker

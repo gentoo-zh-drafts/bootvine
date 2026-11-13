@@ -24,7 +24,7 @@ fn padded_phase_label(label: &str) -> String {
     )
 }
 
-pub struct Stages<'a> {
+pub(super) struct Stages<'a> {
     pub state: &'a BootState,
     pub now: Duration,
     pub colors: &'a StageColors,
@@ -38,7 +38,7 @@ struct Conclusion<'a> {
 }
 
 impl Stages<'_> {
-    pub fn height(&self) -> u16 {
+    pub(super) fn height(&self) -> u16 {
         u16::try_from(self.state.finished_stages.len()).unwrap_or(u16::MAX)
     }
 
@@ -111,7 +111,7 @@ impl Stages<'_> {
         ])
     }
 
-    pub fn current_phase(&self) -> Line<'static> {
+    pub(super) fn current_phase(&self) -> Line<'static> {
         if let Some(conclusion) = self.conclusion() {
             return self.concluded_phase(&conclusion);
         }

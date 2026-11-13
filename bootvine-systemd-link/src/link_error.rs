@@ -5,7 +5,7 @@ use dbus::{Error as BusError, arg::TypeMismatchError};
 use rustix::io::Errno;
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum LinkFailure {
     #[error("systemd bus: {0}")]
     Bus(#[from] BusError),
     #[error("unexpected reply from systemd: {0}")]
@@ -22,19 +22,33 @@ pub enum Error {
     RootSwitch(#[from] Errno),
     #[error("the service manager did not come back")]
     ManagerUnreachable,
-    #[error("{0}")]
-    Watch(WatchFailure),
 }
 
-impl From<Error> for WatchFailure {
-    fn from(error: Error) -> Self {
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct LinkError(#[from] LinkFailure);
+
+impl From<io::Error> for LinkError {
+    fn from(error: io::Error) -> Self {
+        Self(LinkFailure::Console(error))
+    }
+}
+
+impl From<LinkFailure> for WatchFailure {
+    fn from(failure: LinkFailure) -> Self {
         Self {
-            reason: error.to_string(),
+            reason: failure.to_string(),
         }
     }
 }
 
-impl From<Infallible> for Error {
+impl From<LinkError> for WatchFailure {
+    fn from(error: LinkError) -> Self {
+        error.0.into()
+    }
+}
+
+impl From<Infallible> for LinkFailure {
     fn from(never: Infallible) -> Self {
         match never {}
     }

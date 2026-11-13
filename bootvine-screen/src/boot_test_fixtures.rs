@@ -5,9 +5,9 @@ use crate::boot_model::{
     UnitKind, UnitTimeouts, flatten_forest,
 };
 
-pub const MS: Duration = Duration::from_millis(1);
+pub(crate) const MS: Duration = Duration::from_millis(1);
 
-pub struct QueuedUnit {
+pub(crate) struct QueuedUnit {
     pub facts: UnitFacts,
     pub activity: Activity,
     pub kind: JobKind,
@@ -26,7 +26,7 @@ fn fixture_unit_kind(name: &str) -> UnitKind {
     }
 }
 
-pub fn facts(name: &str, after: &[&str]) -> UnitFacts {
+pub(crate) fn facts(name: &str, after: &[&str]) -> UnitFacts {
     let kind = fixture_unit_kind(name);
     let short_name = match kind {
         UnitKind::Target | UnitKind::Other => name.to_owned(),
@@ -45,7 +45,7 @@ pub fn facts(name: &str, after: &[&str]) -> UnitFacts {
     }
 }
 
-pub fn activating(since: Duration) -> Activity {
+pub(crate) fn activating(since: Duration) -> Activity {
     Activity {
         state: Some(ActiveState::Activating),
         inactive_exit: Some(since),
@@ -53,7 +53,7 @@ pub fn activating(since: Duration) -> Activity {
     }
 }
 
-pub fn waiting(name: &str, after: &[&str]) -> QueuedUnit {
+pub(crate) fn waiting(name: &str, after: &[&str]) -> QueuedUnit {
     QueuedUnit {
         facts: facts(name, after),
         activity: Activity::default(),
@@ -61,7 +61,7 @@ pub fn waiting(name: &str, after: &[&str]) -> QueuedUnit {
     }
 }
 
-pub fn running(name: &str, after: &[&str], since: Duration) -> QueuedUnit {
+pub(crate) fn running(name: &str, after: &[&str], since: Duration) -> QueuedUnit {
     QueuedUnit {
         activity: activating(since),
         ..waiting(name, after)
@@ -69,32 +69,32 @@ pub fn running(name: &str, after: &[&str], since: Duration) -> QueuedUnit {
 }
 
 impl QueuedUnit {
-    pub fn stopping(self) -> Self {
+    pub(crate) fn stopping(self) -> Self {
         Self {
             kind: JobKind::TakesDown,
             ..self
         }
     }
 
-    pub fn ordered_before(mut self, before: &[&str]) -> Self {
+    pub(crate) fn ordered_before(mut self, before: &[&str]) -> Self {
         self.facts.before = before.iter().map(ToString::to_string).collect();
         self
     }
 
-    pub fn timing_out(mut self, timeouts: UnitTimeouts) -> Self {
+    pub(crate) fn timing_out(mut self, timeouts: UnitTimeouts) -> Self {
         self.facts.timeouts = timeouts;
         self
     }
 
-    pub fn described(mut self, description: &str) -> Self {
+    pub(crate) fn described(mut self, description: &str) -> Self {
         self.facts.description = (!description.is_empty()).then(|| description.to_owned());
         self
     }
 }
 
-pub const HANDOFF_UNIT: &str = "display-manager.service";
+pub(crate) const HANDOFF_UNIT: &str = "display-manager.service";
 
-pub fn test_vocabulary() -> ManagerVocabulary {
+pub(crate) fn test_vocabulary() -> ManagerVocabulary {
     ManagerVocabulary {
         host_milestones: [
             "sysinit.target",
@@ -115,7 +115,7 @@ pub fn test_vocabulary() -> ManagerVocabulary {
     }
 }
 
-pub fn queued_boot(
+pub(crate) fn queued_boot(
     phase: Phase,
     queued_at: Duration,
     units: impl IntoIterator<Item = QueuedUnit>,
@@ -130,7 +130,7 @@ pub fn queued_boot(
     state
 }
 
-pub fn nested_boot_sample() -> BootState {
+pub(crate) fn nested_boot_sample() -> BootState {
     queued_boot(
         Phase::Host,
         500 * MS,
@@ -149,17 +149,17 @@ pub fn nested_boot_sample() -> BootState {
     )
 }
 
-pub fn queue_unit(state: &mut BootState, id: u32, unit: QueuedUnit, queued_at: Duration) {
+pub(crate) fn queue_unit(state: &mut BootState, id: u32, unit: QueuedUnit, queued_at: Duration) {
     let name = unit.facts.name.clone();
     state.track_unit(unit.facts, unit.activity);
     state.queue_job(id, &name, unit.kind, queued_at);
 }
 
-pub fn waiting_rows(state: &BootState) -> Vec<TreeRow> {
+pub(crate) fn waiting_rows(state: &BootState) -> Vec<TreeRow> {
     flatten_forest(state.waiting_forest(Duration::MAX))
 }
 
-pub fn tree_outline(rows: &[TreeRow]) -> Vec<String> {
+pub(crate) fn tree_outline(rows: &[TreeRow]) -> Vec<String> {
     rows.iter()
         .map(|row| {
             let chain = once(row.label.as_str())

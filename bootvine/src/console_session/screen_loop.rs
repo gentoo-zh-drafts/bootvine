@@ -15,14 +15,17 @@ use bootvine_screen::{
         },
     },
 };
-use bootvine_systemd_link::link_error::Error;
 use crossterm::{
     cursor::{MoveTo, Show},
     execute,
     style::ResetColor,
     terminal::{Clear, ClearType, size},
 };
-use futures::{StreamExt, stream::LocalBoxStream};
+use futures::{
+    StreamExt,
+    future::LocalBoxFuture,
+    stream::{FuturesUnordered, LocalBoxStream},
+};
 use ratatui::{
     Terminal,
     backend::{Backend, CrosstermBackend},
@@ -31,12 +34,19 @@ use ratatui::{
     widgets::Widget,
 };
 
+use crate::console_session::run_error::RunError;
+
 const INPUT_BATCH: usize = 64;
 const PROJECTION_REFRESH: Duration = Duration::from_millis(100);
 const ROWS_LEFT_FOR_SHELL: u16 = 8;
 
+pub enum Performed {
+    Now(Vec<Message>),
+    Later(LocalBoxFuture<'static, Vec<Message>>),
+}
+
 pub trait ScreenRuntime {
-    fn perform(&mut self, command: Command) -> Vec<Message>;
+    fn perform(&mut self, command: Command) -> Performed;
     fn subscribe(&mut self, subscription: &Subscription) -> LocalBoxStream<'static, Message>;
     fn now(&self) -> Duration;
     fn drawn(&mut self) {}
@@ -98,9 +108,14 @@ impl SubscriptionSet {
         SourcePoll::Delivered
     }
 
-    fn poll_ready_messages(&mut self, context: &mut Context<'_>) -> Poll<Vec<Message>> {
+    fn poll_ready_messages(
+        &mut self,
+        context: &mut Context<'_>,
+        commands: &mut PendingCommands,
+    ) -> Poll<Vec<Message>> {
         let count = self.active.len();
         let mut ready = Vec::new();
+        commands.poll_finished(context, &mut ready);
         for offset in 0..count {
             let active = &mut self.active[(self.next_start + offset) % count];
             let SubscriptionSource::Running(source) = &mut active.source else {
@@ -117,6 +132,19 @@ impl SubscriptionSet {
             Poll::Pending
         } else {
             Poll::Ready(ready)
+        }
+    }
+}
+
+#[derive(Default)]
+struct PendingCommands {
+    running: FuturesUnordered<LocalBoxFuture<'static, Vec<Message>>>,
+}
+
+impl PendingCommands {
+    fn poll_finished(&mut self, context: &mut Context<'_>, ready: &mut Vec<Message>) {
+        while let Poll::Ready(Some(messages)) = self.running.poll_next_unpin(context) {
+            ready.extend(messages);
         }
     }
 }
@@ -158,15 +186,19 @@ pub async fn run_screen<Runtime: ScreenRuntime, Console: Backend>(
     model: &mut Model,
     runtime: &mut Runtime,
     terminal: &mut Terminal<Console>,
-) -> Result<(), Error>
+) -> Result<(), RunError>
 where
-    Error: From<Console::Error>,
+    RunError: From<Console::Error>,
 {
     let mut active_subscriptions = SubscriptionSet::default();
+    let mut pending_commands = PendingCommands::default();
     let mut projection = ProjectionCache::Stale;
     loop {
         active_subscriptions.sync(subscriptions(model), runtime);
-        let batch = poll_fn(|context| active_subscriptions.poll_ready_messages(context)).await;
+        let batch = poll_fn(|context| {
+            active_subscriptions.poll_ready_messages(context, &mut pending_commands)
+        })
+        .await;
         let mut queue = VecDeque::from(batch);
         while let Some(message) = queue.pop_front() {
             if matches!(message, Message::Boot(_)) {
@@ -175,7 +207,10 @@ where
             let commands = update(model, message, runtime.now());
             commands
                 .into_iter()
-                .for_each(|command| queue.extend(runtime.perform(command)));
+                .for_each(|command| match runtime.perform(command) {
+                    Performed::Now(messages) => queue.extend(messages),
+                    Performed::Later(finishing) => pending_commands.running.push(finishing),
+                });
             if model.handover.has_ended() {
                 return Ok(());
             }
@@ -189,9 +224,9 @@ fn draw_screen<Runtime: ScreenRuntime, Console: Backend>(
     runtime: &mut Runtime,
     terminal: &mut Terminal<Console>,
     projection: &mut ProjectionCache,
-) -> Result<(), Error>
+) -> Result<(), RunError>
 where
-    Error: From<Console::Error>,
+    RunError: From<Console::Error>,
 {
     let now = runtime.now();
     let refresh = model.console.refresh;

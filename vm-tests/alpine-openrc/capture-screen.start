@@ -1,0 +1,11 @@
+#!/bin/sh
+
+(
+	while pidof bootvine >/dev/null; do sleep 1; done
+	columns=$(stty -F /dev/tty12 size | cut -d " " -f 2)
+	echo "=== bootvine screen ===" >/dev/ttyS0
+	fold -w "$columns" /dev/vcs12 >/dev/ttyS0
+	echo "" >/dev/ttyS0
+	echo "=== end of bootvine screen ===" >/dev/ttyS0
+	poweroff
+) &

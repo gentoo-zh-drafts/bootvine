@@ -8,10 +8,10 @@ use std::{
 
 use bootvine_screen::{
     boot_model::{
-        ActiveState, Activity, BootChange, FailureCause, JobKind, JobResult, Phase, RootRequest,
-        Scope, UnitFacts, UnitTimeouts,
+        ActiveState, Activity, BootChange, BootProgress, FailureCause, JobKind, JobResult, Phase,
+        RootRequest, Scope, UnitFacts, UnitTimeouts,
     },
-    screen_components::screen_application::Message,
+    screen_components::handover::WatchFailure,
 };
 use dbus::Path;
 use futures::{
@@ -26,7 +26,7 @@ use tracing::info;
 use crate::{
     descriptor_streams::{BACKGROUND_CHECK_INTERVAL, CarriedItem, unfold_carrying},
     journal_tail::settled_unit_messages,
-    link_error::Error,
+    link_error::LinkFailure,
     monotonic_clock::monotonic_now,
     switch_root::Sysroot,
     systemd_bus::{
@@ -114,9 +114,11 @@ fn queued_units(signals: &[Signal]) -> impl Iterator<Item = &str> {
     })
 }
 
-fn connected_inputs(changes: Vec<BootChange>) -> Vec<Message> {
+pub(crate) type FeedBatch = Result<Vec<BootChange>, WatchFailure>;
+
+fn connected_inputs(changes: Vec<BootChange>) -> Vec<FeedBatch> {
     (!changes.is_empty())
-        .then_some(Message::Boot(changes))
+        .then_some(Ok(changes))
         .into_iter()
         .collect()
 }
@@ -160,7 +162,7 @@ impl BusFeed {
         }
     }
 
-    async fn next_inputs(&mut self) -> Option<Vec<Message>> {
+    async fn next_inputs(&mut self) -> Option<Vec<FeedBatch>> {
         match &mut self.link {
             Link::Finished => None,
             Link::Connecting { deadline, attempt } => {
@@ -181,7 +183,10 @@ impl BusFeed {
         }
     }
 
-    async fn open_watched(&mut self, attempt: ConnectAttempt) -> Result<Vec<BootChange>, Error> {
+    async fn open_watched(
+        &mut self,
+        attempt: ConnectAttempt,
+    ) -> Result<Vec<BootChange>, LinkFailure> {
         let mut connection = BusConnection::register(Session::open(self.tracker.scope)?)?;
         let changes = self
             .tracker
@@ -191,35 +196,35 @@ impl BusFeed {
         Ok(changes)
     }
 
-    async fn connect(&mut self, deadline: Instant, attempt: ConnectAttempt) -> Vec<Message> {
+    async fn connect(&mut self, deadline: Instant, attempt: ConnectAttempt) -> Vec<FeedBatch> {
         match self.open_watched(attempt).await {
-            Ok(changes) => vec![Message::Boot(changes)],
+            Ok(changes) => vec![Ok(changes)],
             Err(_) if Instant::now() < deadline => {
                 sleep(BACKGROUND_CHECK_INTERVAL).await;
                 Vec::new()
             }
             Err(_) => {
                 self.link = Link::Finished;
-                vec![Message::Failed(Error::ManagerUnreachable.into())]
+                vec![Err(LinkFailure::ManagerUnreachable.into())]
             }
         }
     }
 
-    fn lose_connection(&mut self) -> Vec<Message> {
+    fn lose_connection(&mut self) -> Vec<FeedBatch> {
         let at = monotonic_now();
         let tracker = &mut self.tracker;
         let RootSwitch::Queued(sysroot) = &tracker.root_switch else {
             if tracker.phase == Phase::Shutdown {
                 self.link = Link::Finished;
-                return vec![Message::Boot(vec![BootChange::ManagerExited { at }])];
+                return vec![Ok(vec![BootChange::ManagerExited { at }])];
             }
             tracker.unit_paths.clear();
             self.link = Link::connecting(ConnectAttempt::Again);
-            return vec![Message::Boot(vec![BootChange::ForgetJobs])];
+            return vec![Ok(vec![BootChange::ForgetJobs])];
         };
         if let Err(error) = sysroot.enter() {
             self.link = Link::Finished;
-            return vec![Message::Failed(Error::from(error).into())];
+            return vec![Err(LinkFailure::from(error).into())];
         }
         tracker.root_switch = RootSwitch::NotQueued;
         tracker.unit_paths.clear();
@@ -227,7 +232,7 @@ impl BusFeed {
         tracker.units_in_failed_state.clear();
         tracker.phase = Phase::Host;
         self.link = Link::connecting(ConnectAttempt::Again);
-        vec![Message::Boot(vec![BootChange::SwitchRoot { at }])]
+        vec![Ok(vec![BootChange::SwitchRoot { at }])]
     }
 }
 
@@ -248,7 +253,10 @@ impl BootTracker {
         }
     }
 
-    async fn receive(&mut self, connection: &mut BusConnection) -> Result<Vec<BootChange>, Error> {
+    async fn receive(
+        &mut self,
+        connection: &mut BusConnection,
+    ) -> Result<Vec<BootChange>, LinkFailure> {
         let finished_reads = self.wait_for_bus_or_journal(connection).await;
         match connection.take_signals() {
             SignalBatch::Open(signals) => {
@@ -263,7 +271,7 @@ impl BootTracker {
             }
             SignalBatch::Closed(signals) => {
                 self.arm_root_switch(queued_units(&signals));
-                Err(Error::Disconnected)
+                Err(LinkFailure::Disconnected)
             }
         }
     }
@@ -282,11 +290,11 @@ impl BootTracker {
         &mut self,
         connection: &mut BusConnection,
         items: Vec<Item>,
-        step: impl AsyncFn(&mut Self, &mut BusConnection, Item) -> Result<Vec<BootChange>, Error>,
-    ) -> Result<Vec<BootChange>, Error> {
+        step: impl AsyncFn(&mut Self, &mut BusConnection, Item) -> Result<Vec<BootChange>, LinkFailure>,
+    ) -> Result<Vec<BootChange>, LinkFailure> {
         let step = &step;
         let progress = stream::iter(items)
-            .map(Ok::<Item, Error>)
+            .map(Ok::<Item, LinkFailure>)
             .try_fold(
                 FeedProgress {
                     tracker: self,
@@ -307,7 +315,7 @@ impl BootTracker {
         &self,
         connection: &mut BusConnection,
         jobs: &[JobListing],
-    ) -> Result<String, Error> {
+    ) -> Result<String, LinkFailure> {
         let RootRequest::Named(target) = &self.target else {
             if self.phase != Phase::Shutdown {
                 return connection.default_target().await;
@@ -328,19 +336,17 @@ impl BootTracker {
         &self,
         connection: &mut BusConnection,
         attempt: ConnectAttempt,
-    ) -> Result<Vec<BootChange>, Error> {
-        let boot_in_progress = connection.boot_in_progress().await?;
+    ) -> Result<Vec<BootChange>, LinkFailure> {
+        let progress = connection.boot_progress().await?;
         let origin = (attempt == ConnectAttempt::First).then(|| {
-            BootChange::SetOrigin(if boot_in_progress {
-                Duration::ZERO
-            } else {
-                monotonic_now()
+            BootChange::SetOrigin(match progress {
+                BootProgress::InProgress => Duration::ZERO,
+                BootProgress::Finished => monotonic_now(),
             })
         });
-        let finished = if boot_in_progress {
-            Vec::new()
-        } else {
-            self.boot_finished()
+        let finished = match progress {
+            BootProgress::InProgress => Vec::new(),
+            BootProgress::Finished => self.boot_finished(),
         };
         Ok(origin.into_iter().chain(finished).collect())
     }
@@ -349,7 +355,7 @@ impl BootTracker {
         &mut self,
         connection: &mut BusConnection,
         attempt: ConnectAttempt,
-    ) -> Result<Vec<BootChange>, Error> {
+    ) -> Result<Vec<BootChange>, LinkFailure> {
         connection.subscribe().await?;
         if self.scope == Scope::System {
             connection.silence_status_output().await?;
@@ -418,7 +424,7 @@ impl BootTracker {
         &mut self,
         connection: &mut BusConnection,
         unit: &str,
-    ) -> Result<TrackedUnit, Error> {
+    ) -> Result<TrackedUnit, LinkFailure> {
         if self.unit_paths.values().any(|known| known == unit) {
             return Ok(TrackedUnit::Known(unit.to_owned()));
         }
@@ -444,7 +450,7 @@ impl BootTracker {
         &mut self,
         connection: &mut BusConnection,
         signal: Signal,
-    ) -> Result<Vec<BootChange>, Error> {
+    ) -> Result<Vec<BootChange>, LinkFailure> {
         let at = monotonic_now();
         Ok(match signal {
             Signal::JobNew { id, job, unit } => {
@@ -496,7 +502,7 @@ impl BootTracker {
         connection: &mut BusConnection,
         unit: String,
         fallback_reason: &str,
-    ) -> Result<Option<BootChange>, Error> {
+    ) -> Result<Option<BootChange>, LinkFailure> {
         if !self.unit_paths.values().any(|known| *known == unit) {
             return Ok(None);
         }
@@ -547,7 +553,7 @@ impl BootTracker {
         &mut self,
         connection: &mut BusConnection,
         unit: &str,
-    ) -> Result<TrackedUnit, Error> {
+    ) -> Result<TrackedUnit, LinkFailure> {
         let UnitLookup::Loaded(fetched) = connection.load_unit(unit).await? else {
             return Ok(TrackedUnit::New {
                 facts: Box::new(systemd_unit_facts(
@@ -579,7 +585,7 @@ impl BootTracker {
         job: &Path<'static>,
         unit: String,
         at: Duration,
-    ) -> Result<Vec<BootChange>, Error> {
+    ) -> Result<Vec<BootChange>, LinkFailure> {
         let kind = connection.job_kind(job).await?;
         if kind == JobKind::TakesDown && self.phase != Phase::Shutdown {
             return Ok(Vec::new());
@@ -597,7 +603,11 @@ impl BootTracker {
     }
 }
 
-pub fn bus_inputs(phase: Phase, scope: Scope, target: RootRequest) -> impl Stream<Item = Message> {
+pub(crate) fn boot_change_stream(
+    phase: Phase,
+    scope: Scope,
+    target: RootRequest,
+) -> impl Stream<Item = FeedBatch> + 'static {
     unfold_carrying(BusFeed::new(phase, scope, target), |mut feed| async move {
         let inputs = feed.next_inputs().await?;
         Some(CarriedItem {
@@ -632,7 +642,7 @@ mod tests {
         assert!(connected_inputs(Vec::new()).is_empty());
         assert!(matches!(
             connected_inputs(vec![BootChange::ForgetJobs]).as_slice(),
-            [Message::Boot(_)]
+            [Ok(_)]
         ));
     }
 

@@ -146,11 +146,13 @@ dependencies = [
 name = "bootvine"
 version = "0.1.3"
 dependencies = [
+ "bootvine-openrc-link",
  "bootvine-screen",
  "bootvine-systemd-link",
  "clap",
  "crossterm 0.29.0",
  "futures",
+ "inotify",
  "jiff",
  "ratatui",
  "rustix 1.1.5",
@@ -164,9 +166,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bootvine-openrc-link"
+version = "0.1.3"
+dependencies = [
+ "bootvine-screen",
+ "futures",
+ "inotify",
+ "rustix 1.1.5",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "bootvine-screen"
 version = "0.1.3"
 dependencies = [
+ "futures-core",
  "heck",
  "jiff",
  "petgraph",
@@ -824,6 +840,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a37b2691796cffeb8a8cd305ac66e65841559f147f4e63231d0eafa4db5384d1"
 dependencies = [
  "rustversion",
+]
+
+[[package]]
+name = "inotify"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cc00ea907cab49550b7da656f80ebb97be1b997d931fbcd28d39734e17ce592"
+dependencies = [
+ "bitflags 2.13.2",
+ "futures-util",
+ "inotify-sys",
+ "libc",
+ "tokio",
+]
+
+[[package]]
+name = "inotify-sys"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c033f80b2c113cdf91ab7a33faa9cbc014726dcad99880c8609af2a370edf37d"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

@@ -47,6 +47,13 @@ const MKINITCPIO_INSTALL_HOOK: &str =
     include_str!("../../system-files/mkinitcpio/install/sd-bootvine");
 const INITRD_GENERATORS: [InitrdGenerator; 2] =
     [InitrdGenerator::Dracut, InitrdGenerator::Mkinitcpio];
+const OPENRC_SCRIPT: PackagedUnit = PackagedUnit {
+    name: "/etc/init.d/bootvine",
+    contents: include_str!("../../system-files/openrc/bootvine"),
+};
+const OPENRC_SERVICE: &str = "bootvine";
+const OPENRC_RUNLEVEL: &str = "sysinit";
+const OPENRC_RUNLEVEL_FILE: &str = "/run/openrc/softlevel";
 
 #[derive(Args)]
 pub struct InstallTarget {
@@ -61,6 +68,26 @@ pub struct InstallTarget {
         help = "Stage the files under this directory instead of /; skips sudo and systemctl"
     )]
     destdir: Option<PathBuf>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = ManagerChoice::Detect,
+        help = "Service manager to install for"
+    )]
+    service_manager: ManagerChoice,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ManagerChoice {
+    Detect,
+    Systemd,
+    Openrc,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InstalledManager {
+    Systemd,
+    Openrc,
 }
 
 #[derive(Args)]
@@ -113,6 +140,16 @@ impl InstallTarget {
         self.changes_live_system() && !geteuid().is_root()
     }
 
+    fn manager(&self) -> InstalledManager {
+        match self.service_manager {
+            ManagerChoice::Openrc => InstalledManager::Openrc,
+            ManagerChoice::Detect if Path::new(OPENRC_RUNLEVEL_FILE).is_file() => {
+                InstalledManager::Openrc
+            }
+            ManagerChoice::Systemd | ManagerChoice::Detect => InstalledManager::Systemd,
+        }
+    }
+
     fn binary_path(&self) -> String {
         format!("{}/bin/bootvine", self.prefix.trim_end_matches('/'))
     }
@@ -126,6 +163,7 @@ impl InstallTarget {
     fn every_installed_path(&self) -> Vec<PathBuf> {
         once(PathBuf::from(self.binary_path()))
             .chain(unit_files(self).map(|file| file.destination))
+            .chain(once(openrc_script(self).destination))
             .chain(
                 INITRD_GENERATORS
                     .into_iter()
@@ -199,6 +237,24 @@ fn unit_files(target: &InstallTarget) -> impl Iterator<Item = InstalledFile> {
         })
 }
 
+fn openrc_script(target: &InstallTarget) -> InstalledFile {
+    InstalledFile {
+        destination: PathBuf::from(OPENRC_SCRIPT.name),
+        contents: OPENRC_SCRIPT
+            .contents
+            .replace(PACKAGED_BINARY_PATH, &target.binary_path())
+            .into_bytes(),
+        mode: 0o755,
+    }
+}
+
+fn service_files(target: &InstallTarget) -> Vec<InstalledFile> {
+    match target.manager() {
+        InstalledManager::Systemd => unit_files(target).collect(),
+        InstalledManager::Openrc => vec![openrc_script(target)],
+    }
+}
+
 fn initrd_hook_files(initrd: InitrdGenerator) -> Vec<InstalledFile> {
     match initrd {
         InitrdGenerator::None => Vec::new(),
@@ -267,6 +323,10 @@ fn systemctl<'a>(arguments: impl IntoIterator<Item = &'a str>) -> Result<(), Ins
     run_command(Command::new("systemctl").args(arguments))
 }
 
+fn rc_update<'a>(arguments: impl IntoIterator<Item = &'a str>) -> Result<(), InstallError> {
+    run_command(Command::new("rc-update").args(arguments))
+}
+
 fn unit_names() -> impl Iterator<Item = &'static str> {
     PACKAGED_UNITS.iter().map(|unit| unit.name)
 }
@@ -281,22 +341,35 @@ fn rerun_with_sudo() -> Result<(), InstallError> {
 
 pub fn install_files(options: &InstallOptions) -> Result<(), InstallError> {
     let target = &options.target;
+    let manager = target.manager();
+    if manager == InstalledManager::Openrc && options.initrd != InitrdGenerator::None {
+        return Err(InstallError::InitrdNeedsSystemd);
+    }
     if target.needs_sudo() {
         return rerun_with_sudo();
     }
     binary_file(target)?
         .into_iter()
-        .chain(unit_files(target))
+        .chain(service_files(target))
         .chain(initrd_hook_files(options.initrd))
         .try_for_each(|file| write_installed_file(target, &file))?;
-    if target.changes_live_system() {
-        systemctl(["daemon-reload"])?;
-        if !options.no_enable {
-            systemctl(once("enable").chain(unit_names()))?;
+    if !target.changes_live_system() {
+        return Ok(());
+    }
+    match manager {
+        InstalledManager::Systemd => {
+            systemctl(["daemon-reload"])?;
+            if !options.no_enable {
+                systemctl(once("enable").chain(unit_names()))?;
+            }
         }
-        if let Some(hint) = options.initrd.install_hint() {
-            println!("{hint}");
+        InstalledManager::Openrc if !options.no_enable => {
+            rc_update(["add", OPENRC_SERVICE, OPENRC_RUNLEVEL])?;
         }
+        InstalledManager::Openrc => {}
+    }
+    if let Some(hint) = options.initrd.install_hint() {
+        println!("{hint}");
     }
     Ok(())
 }
@@ -325,6 +398,13 @@ pub fn uninstall_files(options: &UninstallOptions) -> Result<(), InstallError> {
         if !installed_units.is_empty() {
             systemctl(once("disable").chain(installed_units))?;
         }
+        if Path::new("/etc/runlevels")
+            .join(OPENRC_RUNLEVEL)
+            .join(OPENRC_SERVICE)
+            .exists()
+        {
+            rc_update(["del", OPENRC_SERVICE, OPENRC_RUNLEVEL])?;
+        }
     }
     target
         .every_installed_path()
@@ -342,7 +422,9 @@ pub fn uninstall_files(options: &UninstallOptions) -> Result<(), InstallError> {
         _ => {}
     }
     if target.changes_live_system() {
-        systemctl(["daemon-reload"])?;
+        if target.manager() == InstalledManager::Systemd {
+            systemctl(["daemon-reload"])?;
+        }
         removed_initrd_hooks
             .into_iter()
             .filter_map(InitrdGenerator::removal_hint)

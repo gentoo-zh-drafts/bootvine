@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+description="Live dependency tree of boot jobs"
+command="/usr/bin/bootvine"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+input_file="/dev/tty12"
+output_log="/dev/tty12"
+error_log="/run/bootvine.log"
+
+depend() {
+	need devfs
+	before *
+}
+
+start_pre() {
+	/usr/bin/bootvine save-console-state
+}
+
+stop_post() {
+	/usr/bin/bootvine restore-console-state
+}
