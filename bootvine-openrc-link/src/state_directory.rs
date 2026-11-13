@@ -6,6 +6,7 @@ use std::{
 
 use futures::{Stream, StreamExt};
 use inotify::{Inotify, WatchMask};
+use tracing::{info, warn};
 
 const SYSTEM_RUN_ROOT: &str = "/run/openrc";
 const SYSTEM_RUNLEVEL_ROOT: &str = "/etc/runlevels";
@@ -93,9 +94,9 @@ impl StateSnapshot {
     }
 }
 
-struct ListedService {
-    name: String,
-    state: ServiceState,
+pub(crate) struct ListedService {
+    pub(crate) name: String,
+    pub(crate) state: ServiceState,
 }
 
 fn entry_names(directory: &Path) -> Vec<String> {
@@ -131,22 +132,41 @@ fn read_change(run_root: &Path) -> RunlevelChange {
     }
 }
 
-pub(crate) fn read_snapshot(paths: &OpenrcPaths) -> StateSnapshot {
-    StateSnapshot {
-        services: listed_services(&paths.run_root).fold(BTreeMap::new(), |mut services, listed| {
+pub(crate) fn services_by_name(
+    listed_services: impl IntoIterator<Item = ListedService>,
+) -> BTreeMap<String, ServiceState> {
+    listed_services
+        .into_iter()
+        .fold(BTreeMap::new(), |mut services, listed| {
             services
                 .entry(listed.name)
                 .and_modify(|known: &mut ServiceState| *known = (*known).max(listed.state))
                 .or_insert(listed.state);
             services
-        }),
+        })
+}
+
+pub(crate) fn read_snapshot(paths: &OpenrcPaths) -> StateSnapshot {
+    StateSnapshot {
+        services: services_by_name(listed_services(&paths.run_root)),
         runlevel: read_runlevel(&paths.run_root),
         change: read_change(&paths.run_root),
     }
 }
 
 pub(crate) fn read_dependency_cache(paths: &OpenrcPaths) -> String {
-    fs::read_to_string(paths.run_root.join(DEPENDENCY_CACHE)).unwrap_or_default()
+    let cache_path = paths.run_root.join(DEPENDENCY_CACHE);
+    match fs::read_to_string(&cache_path) {
+        Ok(cache) => cache,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            info!(path = %cache_path.display(), "OpenRC has no dependency cache yet, drawing services without orderings");
+            String::new()
+        }
+        Err(error) => {
+            warn!(path = %cache_path.display(), error = %error, "cannot read the OpenRC dependency cache, drawing services without orderings");
+            String::new()
+        }
+    }
 }
 
 pub(crate) fn runlevel_members(paths: &OpenrcPaths, runlevel: &str) -> Vec<String> {

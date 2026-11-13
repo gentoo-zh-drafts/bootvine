@@ -32,13 +32,25 @@ enum BootCompletion {
     Reported,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunlevelProgress {
+    Reached,
+    Pending,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RootProgress {
+    Settled,
+    Pending,
+}
+
 pub(crate) struct BootFeed {
-    tree: DependencyTree,
-    runlevels: &'static [&'static str],
-    tracked: HashSet<String>,
-    jobs: HashMap<String, u32>,
+    dependency_tree: DependencyTree,
+    milestone_runlevels: &'static [&'static str],
+    tracked_services: HashSet<String>,
+    queued_jobs: HashMap<String, u32>,
     next_job: u32,
-    previous: StateSnapshot,
+    previous_snapshot: StateSnapshot,
     completion: BootCompletion,
 }
 
@@ -82,64 +94,81 @@ fn activity_entering(state: ServiceState, at: Duration) -> Activity {
     }
 }
 
-fn runlevel_position(runlevels: &[&str], runlevel: &Runlevel) -> Option<usize> {
-    let Runlevel::Named(name) = runlevel else {
-        return None;
-    };
-    runlevels.iter().position(|known| known == name)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RunlevelProgress {
-    Reached,
-    Pending,
+fn runlevel_position(milestone_runlevels: &[&str], runlevel: &str) -> Option<usize> {
+    milestone_runlevels
+        .iter()
+        .position(|known| *known == runlevel)
 }
 
 fn runlevel_progress(
-    runlevels: &[&str],
-    index: usize,
+    milestone_runlevels: &[&str],
+    runlevel: &str,
     snapshot: &StateSnapshot,
 ) -> RunlevelProgress {
-    match runlevel_position(runlevels, &snapshot.runlevel) {
-        Some(current) if current > index => RunlevelProgress::Reached,
-        Some(current) if current == index && snapshot.change == RunlevelChange::Settled => {
+    let Runlevel::Named(current_runlevel) = &snapshot.runlevel else {
+        return RunlevelProgress::Pending;
+    };
+    match (
+        runlevel_position(milestone_runlevels, current_runlevel),
+        runlevel_position(milestone_runlevels, runlevel),
+    ) {
+        (Some(current_index), Some(wanted_index)) if current_index > wanted_index => {
             RunlevelProgress::Reached
         }
-        Some(_) | None => RunlevelProgress::Pending,
+        (Some(current_index), Some(wanted_index))
+            if current_index == wanted_index && snapshot.change == RunlevelChange::Settled =>
+        {
+            RunlevelProgress::Reached
+        }
+        _ => RunlevelProgress::Pending,
+    }
+}
+
+fn root_progress(milestone_runlevels: &[&str], snapshot: &StateSnapshot) -> RootProgress {
+    let Some(root_runlevel) = milestone_runlevels.last() else {
+        return RootProgress::Pending;
+    };
+    let reached = runlevel_progress(milestone_runlevels, root_runlevel, snapshot);
+    let starting = snapshot
+        .services
+        .values()
+        .any(|state| *state == ServiceState::Starting);
+    match reached {
+        RunlevelProgress::Reached if !starting => RootProgress::Settled,
+        RunlevelProgress::Reached | RunlevelProgress::Pending => RootProgress::Pending,
     }
 }
 
 impl BootFeed {
-    pub(crate) fn new(tree: DependencyTree, phase: Phase) -> Self {
+    pub(crate) fn new(dependency_tree: DependencyTree, phase: Phase) -> Self {
         Self {
-            tree,
-            runlevels: milestone_runlevels(phase),
-            tracked: HashSet::new(),
-            jobs: HashMap::new(),
+            dependency_tree,
+            milestone_runlevels: milestone_runlevels(phase),
+            tracked_services: HashSet::new(),
+            queued_jobs: HashMap::new(),
             next_job: 1,
-            previous: StateSnapshot::default(),
+            previous_snapshot: StateSnapshot::default(),
             completion: BootCompletion::Running,
         }
     }
 
     pub(crate) fn opening_changes(
         &mut self,
-        members: impl Fn(&str) -> Vec<String>,
+        runlevel_members: impl Fn(&str) -> Vec<String>,
         at: Duration,
     ) -> Vec<BootChange> {
-        let root = self
-            .runlevels
+        let milestone_runlevels = self.milestone_runlevels;
+        let root_runlevel = milestone_runlevels
             .last()
             .expect("every phase has a runlevel to reach");
-        let runlevel_units: Vec<BootChange> = self
-            .runlevels
-            .iter()
-            .scan(Vec::new(), |earlier: &mut Vec<String>, runlevel| {
-                let after = members(runlevel)
+        let runlevel_units = milestone_runlevels.iter().scan(
+            Vec::new(),
+            move |earlier_runlevels: &mut Vec<String>, runlevel| {
+                let after = runlevel_members(runlevel)
                     .into_iter()
-                    .chain(earlier.clone())
+                    .chain(earlier_runlevels.clone())
                     .collect();
-                earlier.push((*runlevel).to_owned());
+                earlier_runlevels.push((*runlevel).to_owned());
                 Some(BootChange::TrackUnit {
                     facts: unit_facts(
                         runlevel,
@@ -151,17 +180,15 @@ impl BootFeed {
                     ),
                     activity: Activity::default(),
                 })
-            })
-            .collect();
-        let runlevel_jobs: Vec<BootChange> = self
-            .runlevels
+            },
+        );
+        let runlevel_jobs = milestone_runlevels
             .iter()
-            .map(|runlevel| self.queue(runlevel, JobKind::BringsUp, at))
-            .collect();
+            .map(|runlevel| self.queue(runlevel, JobKind::BringsUp, at));
         [BootChange::SetOrigin(Duration::ZERO)]
             .into_iter()
             .chain(runlevel_units)
-            .chain([BootChange::SetRoot((*root).to_owned())])
+            .chain([BootChange::SetRoot((*root_runlevel).to_owned())])
             .chain(runlevel_jobs)
             .collect()
     }
@@ -169,7 +196,7 @@ impl BootFeed {
     fn queue(&mut self, unit: &str, kind: JobKind, at: Duration) -> BootChange {
         let id = self.next_job;
         self.next_job += 1;
-        self.jobs.insert(unit.to_owned(), id);
+        self.queued_jobs.insert(unit.to_owned(), id);
         BootChange::QueueJob {
             id,
             unit: unit.to_owned(),
@@ -179,15 +206,19 @@ impl BootFeed {
     }
 
     fn finish(&mut self, unit: &str, result: JobResult, at: Duration) -> Option<BootChange> {
-        let id = self.jobs.remove(unit)?;
+        let id = self.queued_jobs.remove(unit)?;
         Some(BootChange::FinishJob { id, result, at })
     }
 
     fn track(&mut self, service: &str) -> Option<BootChange> {
-        self.tracked
+        self.tracked_services
             .insert(service.to_owned())
             .then(|| BootChange::TrackUnit {
-                facts: unit_facts(service, UnitKind::Service, self.tree.ordering_of(service)),
+                facts: unit_facts(
+                    service,
+                    UnitKind::Service,
+                    self.dependency_tree.ordering_of(service),
+                ),
                 activity: Activity::default(),
             })
     }
@@ -198,12 +229,12 @@ impl BootFeed {
         state: ServiceState,
         at: Duration,
     ) -> Vec<BootChange> {
-        let tracked = self.track(service);
-        let job = match state {
-            ServiceState::Starting if !self.jobs.contains_key(service) => {
+        let tracked_change = self.track(service);
+        let job_change = match state {
+            ServiceState::Starting if !self.queued_jobs.contains_key(service) => {
                 Some(self.queue(service, JobKind::BringsUp, at))
             }
-            ServiceState::Stopping if !self.jobs.contains_key(service) => {
+            ServiceState::Stopping if !self.queued_jobs.contains_key(service) => {
                 Some(self.queue(service, JobKind::TakesDown, at))
             }
             ServiceState::Started | ServiceState::Inactive | ServiceState::Stopped => {
@@ -212,112 +243,102 @@ impl BootFeed {
             ServiceState::Failed => self.finish(service, JobResult::Failed, at),
             ServiceState::Starting | ServiceState::Stopping => None,
         };
-        let activity = BootChange::UpdateActivity {
+        let activity_change = BootChange::UpdateActivity {
             unit: service.to_owned(),
             activity: activity_entering(state, at),
         };
-        tracked.into_iter().chain(job).chain([activity]).collect()
+        tracked_change
+            .into_iter()
+            .chain(job_change)
+            .chain([activity_change])
+            .collect()
     }
 
     fn reached_runlevels(&mut self, snapshot: &StateSnapshot, at: Duration) -> Vec<BootChange> {
-        let runlevels = self.runlevels;
-        runlevels
+        let milestone_runlevels = self.milestone_runlevels;
+        milestone_runlevels
             .iter()
-            .enumerate()
-            .filter(|(index, _)| {
-                runlevel_progress(runlevels, *index, snapshot) == RunlevelProgress::Reached
+            .filter(|runlevel| {
+                runlevel_progress(milestone_runlevels, runlevel, snapshot)
+                    == RunlevelProgress::Reached
             })
-            .filter_map(|(_, runlevel)| self.finish(runlevel, JobResult::Done, at))
+            .filter_map(|runlevel| self.finish(runlevel, JobResult::Done, at))
             .collect()
     }
 
     fn boot_finished(&mut self, snapshot: &StateSnapshot) -> Option<BootChange> {
-        let root_index = self.runlevels.len() - 1;
-        let services_starting = snapshot
-            .services
-            .values()
-            .any(|state| *state == ServiceState::Starting);
         match (
             self.completion,
-            runlevel_progress(self.runlevels, root_index, snapshot),
+            root_progress(self.milestone_runlevels, snapshot),
         ) {
-            (BootCompletion::Running, RunlevelProgress::Reached) if !services_starting => {
+            (BootCompletion::Running, RootProgress::Settled) => {
                 self.completion = BootCompletion::Reported;
                 Some(BootChange::BootFinished)
             }
-            _ => None,
+            (BootCompletion::Running | BootCompletion::Reported, _) => None,
         }
     }
 
     pub(crate) fn changes_towards(
         &mut self,
-        current: StateSnapshot,
+        current_snapshot: StateSnapshot,
         at: Duration,
     ) -> Vec<BootChange> {
-        let names: BTreeSet<&String> = self
-            .previous
+        let service_names: BTreeSet<&String> = self
+            .previous_snapshot
             .services
             .keys()
-            .chain(current.services.keys())
+            .chain(current_snapshot.services.keys())
             .collect();
-        let moved: Vec<String> = names
+        let moved_services: Vec<String> = service_names
             .into_iter()
-            .filter(|name| self.previous.state_of(name) != current.state_of(name))
+            .filter(|name| self.previous_snapshot.state_of(name) != current_snapshot.state_of(name))
             .cloned()
             .collect();
-        let service_changes: Vec<BootChange> = moved
+        let service_changes: Vec<BootChange> = moved_services
             .iter()
-            .flat_map(|name| self.service_moved(name, current.state_of(name), at))
+            .flat_map(|name| self.service_moved(name, current_snapshot.state_of(name), at))
             .collect();
-        let runlevel_changes = self.reached_runlevels(&current, at);
-        let finished = self.boot_finished(&current);
-        self.previous = current;
+        let runlevel_changes = self.reached_runlevels(&current_snapshot, at);
+        let finished_change = self.boot_finished(&current_snapshot);
+        self.previous_snapshot = current_snapshot;
         service_changes
             .into_iter()
             .chain(runlevel_changes)
-            .chain(finished)
+            .chain(finished_change)
             .collect()
     }
-}
-
-fn non_empty(batch: &FeedBatch) -> bool {
-    !matches!(batch, Ok(changes) if changes.is_empty())
 }
 
 pub(crate) fn boot_change_stream(
     paths: OpenrcPaths,
     phase: Phase,
 ) -> impl Stream<Item = FeedBatch> + 'static {
-    let tree = read_dependency_cache(&paths)
-        .parse()
-        .expect("parsing the OpenRC dependency cache never fails");
-    let mut feed = BootFeed::new(tree, phase);
+    let Ok(dependency_tree) = read_dependency_cache(&paths).parse();
+    let mut openrc_feed = BootFeed::new(dependency_tree, phase);
     let at = monotonic_now();
-    let opening = feed
+    let opening_changes = openrc_feed
         .opening_changes(|runlevel| runlevel_members(&paths, runlevel), at)
         .into_iter()
-        .chain(feed.changes_towards(read_snapshot(&paths), at))
+        .chain(openrc_feed.changes_towards(read_snapshot(&paths), at))
         .collect();
-    let opened = stream::iter([Ok(opening)]);
+    let opening_batch = stream::iter([Ok(opening_changes)]);
     match state_changes(&paths) {
-        Err(error) => opened
+        Err(error) => opening_batch
             .chain(stream::iter([Err(OpenrcError::from(error).into())]))
             .left_stream(),
-        Ok(changes) => {
-            opened
-                .chain(changes.map(move |()| {
-                    Ok(feed.changes_towards(read_snapshot(&paths), monotonic_now()))
-                }))
-                .filter(|batch| ready(non_empty(batch)))
-                .right_stream()
-        }
+        Ok(state_change_events) => opening_batch
+            .chain(state_change_events.map(move |()| {
+                Ok(openrc_feed.changes_towards(read_snapshot(&paths), monotonic_now()))
+            }))
+            .filter(|batch| ready(!matches!(batch, Ok(changes) if changes.is_empty())))
+            .right_stream(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
         env, fs,
         os::unix::fs::symlink,
         path::{Path, PathBuf},
@@ -328,23 +349,28 @@ mod tests {
     use tokio::{runtime::Builder, time::timeout};
 
     use super::*;
-    use crate::openrc_vocabulary::openrc_vocabulary;
+    use crate::{
+        openrc_vocabulary::openrc_vocabulary,
+        state_directory::{ListedService, services_by_name},
+    };
 
     const MS: Duration = Duration::from_millis(1);
     const STREAM_PATIENCE: Duration = Duration::from_secs(5);
 
+    fn listed(name: &str, state: ServiceState) -> ListedService {
+        ListedService {
+            name: name.to_owned(),
+            state,
+        }
+    }
+
     fn snapshot(
         runlevel: &str,
         change: RunlevelChange,
-        services: &[(&str, ServiceState)],
+        listed_services: impl IntoIterator<Item = ListedService>,
     ) -> StateSnapshot {
         StateSnapshot {
-            services: services
-                .iter()
-                .fold(BTreeMap::new(), |mut listed, (name, state)| {
-                    listed.insert((*name).to_owned(), *state);
-                    listed
-                }),
+            services: services_by_name(listed_services),
             runlevel: Runlevel::Named(runlevel.to_owned()),
             change,
         }
@@ -402,7 +428,7 @@ mod tests {
             snapshot(
                 "boot",
                 RunlevelChange::Starting,
-                &[("sshd", ServiceState::Starting)],
+                [listed("sshd", ServiceState::Starting)],
             ),
             2 * MS,
         );
@@ -413,7 +439,7 @@ mod tests {
             snapshot(
                 "boot",
                 RunlevelChange::Starting,
-                &[("sshd", ServiceState::Started)],
+                [listed("sshd", ServiceState::Started)],
             ),
             3 * MS,
         );
@@ -436,7 +462,7 @@ mod tests {
             snapshot(
                 "default",
                 RunlevelChange::Starting,
-                &[("broken", ServiceState::Starting)],
+                [listed("broken", ServiceState::Starting)],
             ),
             2 * MS,
         );
@@ -446,7 +472,7 @@ mod tests {
             snapshot(
                 "default",
                 RunlevelChange::Starting,
-                &[("broken", ServiceState::Failed)],
+                [listed("broken", ServiceState::Failed)],
             ),
             3 * MS,
         );
@@ -460,7 +486,7 @@ mod tests {
         let settled = snapshot(
             "default",
             RunlevelChange::Settled,
-            &[("sshd", ServiceState::Started)],
+            [listed("sshd", ServiceState::Started)],
         );
         let changes = advance(&mut feed, &mut state, settled.clone(), 2 * MS);
         assert!(changes.contains(&BootChange::BootFinished));
@@ -478,7 +504,7 @@ mod tests {
             snapshot(
                 "default",
                 RunlevelChange::Settled,
-                &[("ntpd", ServiceState::Starting)],
+                [listed("ntpd", ServiceState::Starting)],
             ),
             2 * MS,
         );

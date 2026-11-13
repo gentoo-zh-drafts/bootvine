@@ -140,7 +140,7 @@ impl InstallTarget {
         self.changes_live_system() && !geteuid().is_root()
     }
 
-    fn manager(&self) -> InstalledManager {
+    fn installed_manager(&self) -> InstalledManager {
         match self.service_manager {
             ManagerChoice::Openrc => InstalledManager::Openrc,
             ManagerChoice::Detect if Path::new(OPENRC_RUNLEVEL_FILE).is_file() => {
@@ -249,7 +249,7 @@ fn openrc_script(target: &InstallTarget) -> InstalledFile {
 }
 
 fn service_files(target: &InstallTarget) -> Vec<InstalledFile> {
-    match target.manager() {
+    match target.installed_manager() {
         InstalledManager::Systemd => unit_files(target).collect(),
         InstalledManager::Openrc => vec![openrc_script(target)],
     }
@@ -341,8 +341,8 @@ fn rerun_with_sudo() -> Result<(), InstallError> {
 
 pub fn install_files(options: &InstallOptions) -> Result<(), InstallError> {
     let target = &options.target;
-    let manager = target.manager();
-    if manager == InstalledManager::Openrc && options.initrd != InitrdGenerator::None {
+    let installed_manager = target.installed_manager();
+    if installed_manager == InstalledManager::Openrc && options.initrd != InitrdGenerator::None {
         return Err(InstallError::InitrdNeedsSystemd);
     }
     if target.needs_sudo() {
@@ -356,7 +356,7 @@ pub fn install_files(options: &InstallOptions) -> Result<(), InstallError> {
     if !target.changes_live_system() {
         return Ok(());
     }
-    match manager {
+    match installed_manager {
         InstalledManager::Systemd => {
             systemctl(["daemon-reload"])?;
             if !options.no_enable {
@@ -422,7 +422,7 @@ pub fn uninstall_files(options: &UninstallOptions) -> Result<(), InstallError> {
         _ => {}
     }
     if target.changes_live_system() {
-        if target.manager() == InstalledManager::Systemd {
+        if target.installed_manager() == InstalledManager::Systemd {
             systemctl(["daemon-reload"])?;
         }
         removed_initrd_hooks

@@ -194,16 +194,16 @@ pub(crate) async fn restore_status_after_watch<Failure: From<LinkError>>(
     if !matches!(watched, Ok(StatusRelease::Immediately)) {
         select(pin!(terminated), pin!(boot_finish_or_lost_connection())).await;
     }
-    silenced_status.restore().map_err(LinkError::from)?;
+    silenced_status.restore()?;
     watched.map(drop)
 }
 
 struct SilencedStatus;
 
 impl SilencedStatus {
-    fn restore(self) -> Result<(), LinkFailure> {
+    fn restore(self) -> Result<(), LinkError> {
         mem::forget(self);
-        Session::open(Scope::System)?.restore_configured_status()
+        Ok(Session::open(Scope::System)?.restore_configured_status()?)
     }
 }
 

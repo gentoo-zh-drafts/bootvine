@@ -57,7 +57,7 @@ pub struct LiveSettings {
 }
 
 pub struct LiveRuntime<Manager: ServiceManager> {
-    manager: Manager,
+    service_manager: Manager,
     scope: Scope,
     phase: Phase,
     target: RootRequest,
@@ -88,11 +88,11 @@ fn failure_stream(error: io::Error) -> LocalBoxStream<'static, Message> {
 
 impl<Manager: ServiceManager> LiveRuntime<Manager> {
     #[must_use]
-    pub fn start(manager: Manager, settings: LiveSettings) -> (Self, Model) {
+    pub fn start(service_manager: Manager, settings: LiveSettings) -> (Self, Model) {
         let stdin_terminal = StdinTerminal::try_from(stdin())
             .expect("naming the terminal on stdin fails only when there is none");
         let (kernel, held_terminal) = match settings.scope {
-            Scope::System if manager.console_prompt() == ConsolePrompt::Showing => {
+            Scope::System if service_manager.console_prompt() == ConsolePrompt::Showing => {
                 info!("a password prompt is already showing, staying behind it");
                 (KernelConsole::quiet(), HeldTerminal::StayingBehind)
             }
@@ -104,7 +104,7 @@ impl<Manager: ServiceManager> LiveRuntime<Manager> {
             StdinTerminal::OtherTerminal | StdinTerminal::NotATerminal => OwnConsole::Elsewhere,
         };
         let model = Model {
-            boot: BootState::new(settings.phase, &manager.vocabulary()),
+            boot: BootState::new(settings.phase, &service_manager.vocabulary()),
             origin: read_boot_origin(),
             colors: settings.colors,
             timing: settings.timing,
@@ -119,7 +119,7 @@ impl<Manager: ServiceManager> LiveRuntime<Manager> {
             handover: Handover::Watching,
         };
         let runtime = Self {
-            manager,
+            service_manager,
             scope: settings.scope,
             phase: settings.phase,
             target: settings.target,
@@ -134,7 +134,7 @@ impl<Manager: ServiceManager> LiveRuntime<Manager> {
 
 impl<Manager: ServiceManager> Drop for LiveRuntime<Manager> {
     fn drop(&mut self) {
-        if self.manager.console_prompt() == ConsolePrompt::Showing {
+        if self.service_manager.console_prompt() == ConsolePrompt::Showing {
             info!("leaving a password prompt to the console agent on this terminal");
             self.held_terminal.stay_switched();
         }
@@ -143,7 +143,6 @@ impl<Manager: ServiceManager> Drop for LiveRuntime<Manager> {
 
 impl<Manager: ServiceManager> ScreenRuntime for LiveRuntime<Manager> {
     fn perform(&mut self, command: Command) -> Performed {
-        let manager = self.manager.clone();
         match command {
             Command::TakeForeground => {
                 self.held_terminal = HeldTerminal::take(self.stdin_terminal);
@@ -175,40 +174,53 @@ impl<Manager: ServiceManager> ScreenRuntime for LiveRuntime<Manager> {
                 self.held_terminal = HeldTerminal::StayingBehind;
                 Performed::Now(Vec::new())
             }
-            Command::SendAnswer { file, answer } => Performed::Later(
-                async move {
-                    match manager.answer_password(answer).await {
-                        Ok(()) => {
-                            info!(path = %file.display(), "answered a password prompt");
-                            vec![Message::AnswerDelivered(file)]
-                        }
-                        Err(error) => {
-                            warn!(error = %error, "cannot answer the password prompt");
-                            vec![Message::AnswerUndelivered(file)]
+            Command::SendAnswer { file, answer } => {
+                let service_manager = self.service_manager.clone();
+                Performed::Later(
+                    async move {
+                        match service_manager.answer_password(answer).await {
+                            Ok(()) => {
+                                info!(path = %file.display(), "answered a password prompt");
+                                vec![Message::AnswerDelivered(file)]
+                            }
+                            Err(error) => {
+                                warn!(error = %error, "cannot answer the password prompt");
+                                vec![Message::AnswerUndelivered(file)]
+                            }
                         }
                     }
-                }
-                .boxed_local(),
-            ),
-            Command::AskShellStarting => Performed::Later(
-                async move { vec![Message::ShellQueryAnswered(manager.shell_start().await)] }
                     .boxed_local(),
-            ),
-            Command::AskDisplayManagerState => Performed::Later(
-                async move {
-                    vec![Message::DisplayManagerAnswered(
-                        manager.display_manager().await,
-                    )]
-                }
-                .boxed_local(),
-            ),
+                )
+            }
+            Command::AskShellStarting => {
+                let service_manager = self.service_manager.clone();
+                Performed::Later(
+                    async move {
+                        vec![Message::ShellQueryAnswered(
+                            service_manager.shell_start().await,
+                        )]
+                    }
+                    .boxed_local(),
+                )
+            }
+            Command::AskDisplayManagerState => {
+                let service_manager = self.service_manager.clone();
+                Performed::Later(
+                    async move {
+                        vec![Message::DisplayManagerAnswered(
+                            service_manager.display_manager().await,
+                        )]
+                    }
+                    .boxed_local(),
+                )
+            }
         }
     }
 
     fn subscribe(&mut self, subscription: &Subscription) -> LocalBoxStream<'static, Message> {
         match subscription {
             Subscription::BootFeed => self
-                .manager
+                .service_manager
                 .boot_changes(self.phase, self.scope, self.target.clone())
                 .map(|batch| match batch {
                     Ok(changes) => Message::Boot(changes),
@@ -220,12 +232,12 @@ impl<Manager: ServiceManager> ScreenRuntime for LiveRuntime<Manager> {
                 termination_inputs().map_or_else(failure_stream, StreamExt::boxed_local)
             }
             Subscription::ConsolePrompts => self
-                .manager
+                .service_manager
                 .console_prompts()
                 .map(Message::ConsolePromptChanged)
                 .boxed_local(),
             Subscription::PasswordRequests => self
-                .manager
+                .service_manager
                 .password_requests()
                 .map(Message::PasswordRequestsListed)
                 .boxed_local(),
@@ -236,7 +248,7 @@ impl<Manager: ServiceManager> ScreenRuntime for LiveRuntime<Manager> {
             } => {
                 let file = file.clone();
                 stream::once(
-                    self.manager
+                    self.service_manager
                         .password_abandoned(*deadline, *asker)
                         .map(move |()| Message::PromptAbandoned(file)),
                 )

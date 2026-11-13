@@ -77,18 +77,21 @@ fn cache_line(line: &str) -> Option<CacheLine<'_>> {
     (other != ALL_SERVICES).then_some(CacheLine::Ordering { index, side, other })
 }
 
+struct NamedIndex<'cache> {
+    index: &'cache str,
+    name: &'cache str,
+}
+
 #[derive(Default)]
 struct IndexedServices<'cache> {
-    names: BTreeMap<&'cache str, &'cache str>,
+    names: Vec<NamedIndex<'cache>>,
     orderings: BTreeMap<&'cache str, ServiceOrdering>,
 }
 
 impl<'cache> IndexedServices<'cache> {
     fn record(mut self, line: CacheLine<'cache>) -> Self {
         match line {
-            CacheLine::Service { index, name } => {
-                self.names.insert(index, name);
-            }
+            CacheLine::Service { index, name } => self.names.push(NamedIndex { index, name }),
             CacheLine::Ordering { index, side, other } => {
                 let ordering = self.orderings.entry(index).or_default();
                 match side {
@@ -105,18 +108,21 @@ impl FromStr for DependencyTree {
     type Err = Infallible;
 
     fn from_str(cache: &str) -> Result<Self, Infallible> {
-        let indexed = cache
+        let indexed_services = cache
             .lines()
             .filter_map(cache_line)
             .fold(IndexedServices::default(), IndexedServices::record);
         let IndexedServices {
             names,
             mut orderings,
-        } = indexed;
+        } = indexed_services;
         let services = names
             .into_iter()
-            .fold(BTreeMap::new(), |mut services, (index, name)| {
-                services.insert(name.to_owned(), orderings.remove(index).unwrap_or_default());
+            .fold(BTreeMap::new(), |mut services, named| {
+                services.insert(
+                    named.name.to_owned(),
+                    orderings.remove(named.index).unwrap_or_default(),
+                );
                 services
             });
         Ok(Self { services })
@@ -139,7 +145,8 @@ depinfo_1_keyword_0='-docker'
 ";
 
     fn parsed() -> DependencyTree {
-        SAMPLE_CACHE.parse().expect("parsing the cache never fails")
+        let Ok(dependency_tree) = SAMPLE_CACHE.parse();
+        dependency_tree
     }
 
     #[test]

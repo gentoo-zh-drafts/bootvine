@@ -15,6 +15,7 @@ use bootvine_screen::{
     service_manager::ServiceManager,
 };
 use futures::{Stream, StreamExt, stream};
+use tracing::warn;
 
 use crate::{
     boot_feed::boot_change_stream,
@@ -31,24 +32,28 @@ pub struct OpenrcLink {
     paths: OpenrcPaths,
 }
 
-fn console_prompt_in(snapshot: &StateSnapshot) -> ConsolePrompt {
-    if PROMPTING_SERVICES
-        .iter()
-        .any(|service| snapshot.state_of(service) == ServiceState::Starting)
-    {
-        ConsolePrompt::Showing
-    } else {
-        ConsolePrompt::Absent
+impl From<&StateSnapshot> for ConsolePrompt {
+    fn from(snapshot: &StateSnapshot) -> Self {
+        if PROMPTING_SERVICES
+            .iter()
+            .any(|service| snapshot.state_of(service) == ServiceState::Starting)
+        {
+            Self::Showing
+        } else {
+            Self::Absent
+        }
     }
 }
 
-fn boot_progress_in(snapshot: &StateSnapshot) -> BootProgress {
-    let last_runlevel = BOOT_RUNLEVELS[BOOT_RUNLEVELS.len() - 1];
-    match (&snapshot.runlevel, snapshot.change) {
-        (Runlevel::Named(runlevel), RunlevelChange::Settled) if runlevel == last_runlevel => {
-            BootProgress::Finished
+impl From<&StateSnapshot> for BootProgress {
+    fn from(snapshot: &StateSnapshot) -> Self {
+        let last_runlevel = BOOT_RUNLEVELS[BOOT_RUNLEVELS.len() - 1];
+        match (&snapshot.runlevel, snapshot.change) {
+            (Runlevel::Named(runlevel), RunlevelChange::Settled) if runlevel == last_runlevel => {
+                Self::Finished
+            }
+            _ => Self::InProgress,
         }
-        _ => BootProgress::InProgress,
     }
 }
 
@@ -68,7 +73,7 @@ impl ServiceManager for OpenrcLink {
     }
 
     fn boot_progress(&self) -> impl Future<Output = BootProgress> {
-        ready(boot_progress_in(&read_snapshot(&self.paths)))
+        ready(BootProgress::from(&read_snapshot(&self.paths)))
     }
 
     fn boot_changes(
@@ -93,15 +98,18 @@ impl ServiceManager for OpenrcLink {
     }
 
     fn console_prompt(&self) -> ConsolePrompt {
-        console_prompt_in(&read_snapshot(&self.paths))
+        ConsolePrompt::from(&read_snapshot(&self.paths))
     }
 
     fn console_prompts(&self) -> impl Stream<Item = ConsolePrompt> + 'static {
         let paths = self.paths.clone();
         match state_changes(&paths) {
-            Err(_) => stream::pending().left_stream(),
-            Ok(changes) => changes
-                .map(move |()| console_prompt_in(&read_snapshot(&paths)))
+            Err(error) => {
+                warn!(error = %error, "cannot watch OpenRC for console prompts");
+                stream::pending().left_stream()
+            }
+            Ok(state_change_events) => state_change_events
+                .map(move |()| ConsolePrompt::from(&read_snapshot(&paths)))
                 .right_stream(),
         }
     }

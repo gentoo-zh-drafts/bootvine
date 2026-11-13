@@ -24,9 +24,9 @@ pub fn restore_console_state() -> Result<(), RunError> {
     )?;
     match DetectedManager::running()? {
         #[cfg(feature = "systemd")]
-        DetectedManager::Systemd(manager) => manager.restore_status_output()?,
+        DetectedManager::Systemd(service_manager) => service_manager.restore_status_output()?,
         #[cfg(feature = "openrc")]
-        DetectedManager::Openrc(manager) => manager.restore_status_output()?,
+        DetectedManager::Openrc(service_manager) => service_manager.restore_status_output()?,
     }
     Ok(())
 }

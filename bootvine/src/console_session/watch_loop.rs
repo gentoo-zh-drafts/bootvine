@@ -31,14 +31,18 @@ pub fn run(settings: &Settings) -> Result<(), RunError> {
         .build()?;
     match DetectedManager::running()? {
         #[cfg(feature = "systemd")]
-        DetectedManager::Systemd(manager) => runtime.block_on(watch_with(manager, settings)),
+        DetectedManager::Systemd(service_manager) => {
+            runtime.block_on(watch_with(service_manager, settings))
+        }
         #[cfg(feature = "openrc")]
-        DetectedManager::Openrc(manager) => runtime.block_on(watch_with(manager, settings)),
+        DetectedManager::Openrc(service_manager) => {
+            runtime.block_on(watch_with(service_manager, settings))
+        }
     }
 }
 
 async fn watch_with<Manager: ServiceManager>(
-    manager: Manager,
+    service_manager: Manager,
     settings: &Settings,
 ) -> Result<(), RunError>
 where
@@ -47,17 +51,17 @@ where
     let request = settings.request;
     if settings.scope == Scope::System
         && request == RunRequest::Boot
-        && manager.boot_progress().await == BootProgress::Finished
+        && service_manager.boot_progress().await == BootProgress::Finished
     {
         info!("boot already finished, leaving the console alone");
         return Ok(());
     }
-    let phase = manager.starting_phase(settings.scope, request);
-    watch_live_boot(manager, settings, phase).await
+    let phase = service_manager.starting_phase(settings.scope, request);
+    watch_live_boot(service_manager, settings, phase).await
 }
 
 async fn watch_live_boot<Manager: ServiceManager>(
-    manager: Manager,
+    service_manager: Manager,
     settings: &Settings,
     phase: Phase,
 ) -> Result<(), RunError>
@@ -66,22 +70,24 @@ where
 {
     match settings.scope {
         Scope::System => {
-            manager
+            service_manager
                 .clone()
-                .quiet_status_output_during(watch_on_console(manager, settings, phase))
+                .quiet_status_output_during(watch_on_console(service_manager, settings, phase))
                 .await
         }
-        Scope::User => watch_on_console(manager, settings, phase).await.map(drop),
+        Scope::User => watch_on_console(service_manager, settings, phase)
+            .await
+            .map(drop),
     }
 }
 
 async fn watch_on_console<Manager: ServiceManager>(
-    manager: Manager,
+    service_manager: Manager,
     settings: &Settings,
     phase: Phase,
 ) -> Result<StatusRelease, RunError> {
     let (mut runtime, mut model) = LiveRuntime::start(
-        manager,
+        service_manager,
         LiveSettings {
             scope: settings.scope,
             phase,
