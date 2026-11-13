@@ -2,6 +2,11 @@ machineName: {
   boot.loader.grub.enable = false;
 
   services.getty.autologinUser = "root";
+  services.greetd.settings.initial_session = {
+    user = "root";
+    command = "bash";
+  };
+
   fileSystems."/" = {
     device = "/dev/disk/by-label/nixos";
     fsType = "ext4";
