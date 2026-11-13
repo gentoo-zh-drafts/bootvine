@@ -1,15 +1,8 @@
 use std::{
-    fs::{read_dir, read_link, read_to_string},
-    io::ErrorKind,
     iter::once,
     path::{Path, PathBuf},
 };
 
-use rustix::system::uname;
-
-const KERNEL_COMMAND_LINE: &str = "/proc/cmdline";
-const SYSTEM_PROFILES: &str = "/nix/var/nix/profiles";
-const OS_RELEASES: [&str; 2] = ["/etc/os-release", "/usr/lib/os-release"];
 const NIXOS_SYSTEM: &str = "nixos-system-";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -21,35 +14,6 @@ pub struct BootOrigin {
 }
 
 impl BootOrigin {
-    #[must_use]
-    pub fn read() -> Self {
-        let names = uname();
-        let host = names.nodename().to_string_lossy().into_owned();
-        let command_line =
-            read_to_string(KERNEL_COMMAND_LINE).expect("the kernel command line is readable");
-        let system_path = init_system(&command_line);
-        let system = system_path
-            .and_then(|path| nixos_version(path, &host))
-            .map(|version| format!("NixOS {version}"))
-            .or_else(|| {
-                OS_RELEASES
-                    .iter()
-                    .find_map(|path| match read_to_string(path) {
-                        Err(error) if error.kind() == ErrorKind::NotFound => None,
-                        contents => Some(contents.expect("os-release is readable")),
-                    })
-                    .and_then(|release| pretty_name(&release))
-            });
-        let generation =
-            system_path.and_then(|path| generation_of(Path::new(path), &system_links()));
-        Self {
-            kernel: format!("Linux {}", names.release().to_string_lossy()),
-            host,
-            system,
-            generation,
-        }
-    }
-
     #[must_use]
     pub fn parts(&self) -> Vec<String> {
         once(self.host.clone())
@@ -64,14 +28,16 @@ impl BootOrigin {
     }
 }
 
-fn init_system(command_line: &str) -> Option<&str> {
+#[must_use]
+pub fn init_system(command_line: &str) -> Option<&str> {
     command_line
         .split_whitespace()
         .find_map(|argument| argument.strip_prefix("init="))
         .and_then(|init| init.strip_suffix("/init"))
 }
 
-fn nixos_version<'a>(system_path: &'a str, host: &str) -> Option<&'a str> {
+#[must_use]
+pub fn nixos_version<'a>(system_path: &'a str, host: &str) -> Option<&'a str> {
     let (_, name) = system_path.rsplit_once('/')?;
     let (_, rest) = name.split_once('-')?;
     rest.strip_prefix(NIXOS_SYSTEM)?
@@ -79,40 +45,21 @@ fn nixos_version<'a>(system_path: &'a str, host: &str) -> Option<&'a str> {
         .strip_prefix('-')
 }
 
-fn pretty_name(os_release: &str) -> Option<String> {
+#[must_use]
+pub fn pretty_name(os_release: &str) -> Option<String> {
     os_release
         .lines()
         .find_map(|line| line.strip_prefix("PRETTY_NAME="))
         .map(|value| value.trim_matches('"').to_owned())
 }
 
-struct SystemLink {
-    generation: String,
-    target: PathBuf,
+pub struct SystemLink {
+    pub generation: String,
+    pub target: PathBuf,
 }
 
-fn system_links() -> Vec<SystemLink> {
-    let entries = match read_dir(SYSTEM_PROFILES) {
-        Err(error) if error.kind() == ErrorKind::NotFound => return Vec::new(),
-        listed => listed.expect("the nix system profiles are listable"),
-    };
-    entries
-        .map(|entry| entry.expect("entries of the nix system profiles are readable"))
-        .filter_map(|entry| {
-            let name = entry
-                .file_name()
-                .into_string()
-                .expect("nix profile names are UTF-8");
-            let generation = name.strip_prefix("system-")?.strip_suffix("-link")?;
-            Some(SystemLink {
-                generation: generation.to_owned(),
-                target: read_link(entry.path()).expect("system generation links are symlinks"),
-            })
-        })
-        .collect()
-}
-
-fn generation_of(system_path: &Path, links: &[SystemLink]) -> Option<String> {
+#[must_use]
+pub fn generation_of(system_path: &Path, links: &[SystemLink]) -> Option<String> {
     links
         .iter()
         .find(|link| link.target == system_path)

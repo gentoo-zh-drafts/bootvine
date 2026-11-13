@@ -1,0 +1,21 @@
+id: pure-layers-without-effects
+valid:
+  - "use std::{collections::HashMap, iter::once, time::Duration};"
+  - "use ratatui::{buffer::Buffer, widgets::Widget};"
+  - "use crate::boot_model::BootState;"
+  - "fn elapsed(now: Duration, origin: Duration) -> Duration { now.saturating_sub(origin) }"
+invalid:
+  - "use std::fs::read_to_string;"
+  - "use std::{fs, iter::once};"
+  - "use std::{fs::read_dir, io::ErrorKind};"
+  - "use std::time::Instant;"
+  - "use std::time::{Duration, Instant};"
+  - "use rustix::system::uname;"
+  - "use rustix::{fs, io};"
+  - "use tokio::time::sleep;"
+  - "use std::os::unix::net::UnixDatagram;"
+  - "fn command_line() -> String { std::fs::read_to_string(\"/proc/cmdline\").unwrap_or_default() }"
+  - "async fn later() {}"
+  - "fn later() { let waited = async { tick.await }; }"
+  - "fn raw() { unsafe { touch() } }"
+  - "fn stamp() -> Duration { monotonic_now() }"

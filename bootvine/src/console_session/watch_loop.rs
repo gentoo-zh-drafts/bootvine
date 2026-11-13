@@ -17,10 +17,11 @@ use tokio::{runtime::Builder, time::timeout};
 use tracing::info;
 
 use crate::{
-    boot_model::{BootState, Phase, boot_origin::BootOrigin},
+    boot_model::{BootState, Phase},
     console_session::{
         ask_password::watch_requests,
         live_desk::{LiveDesk, password_request_inputs},
+        origin_reading::read_boot_origin,
         stream_sources::{
             BACKGROUND_CHECK_INTERVAL, frame_inputs, key_inputs, periodic_inputs,
             resume_marker_inputs, terminal_switch_inputs, termination_inputs,
@@ -47,7 +48,6 @@ pub struct Settings {
     pub colors: Colors,
 }
 
-const FULL_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 const LATE_FAILURES_PATIENCE: Duration = Duration::from_millis(1200);
 const ROWS_LEFT_FOR_SHELL: u16 = 8;
 
@@ -93,6 +93,10 @@ fn boot_already_finished(settings: &Settings) -> bool {
             .is_ok_and(|booting| !booting)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the initrd announces itself with /etc/initrd-release"
+)]
 fn starting_phase(settings: &Settings) -> Phase {
     match settings.scope {
         _ if settings.shutdown => Phase::Shutdown,
@@ -141,6 +145,7 @@ async fn watch_on_console(settings: &Settings, phase: Phase) -> Result<StatusRel
         settings.scope,
         requests.is_some().then_some(prompt_check_sender),
     );
+    let overwrite_inputs = desk.console_contents().overwrite_inputs();
     let password_inputs = requests.map(password_request_inputs).transpose()?;
     let event_inputs = stream::select(
         stream::select(
@@ -156,14 +161,14 @@ async fn watch_on_console(settings: &Settings, phase: Phase) -> Result<StatusRel
         stream::select(frame_inputs(), prompt_inputs),
         stream::select(
             stream::select(terminal_switch_inputs(), resume_marker_inputs()),
-            periodic_inputs(FULL_REPAINT_INTERVAL, || ScreenInput::FullRepaint),
+            overwrite_inputs,
         ),
     );
     let mut inputs = pin!(stream::select(event_inputs, timer_inputs));
     let mut screen = WatchScreen::new(
         BootState::new(phase),
         desk,
-        BootOrigin::read,
+        read_boot_origin,
         settings.colors,
         settings.timing,
         Duration::ZERO,

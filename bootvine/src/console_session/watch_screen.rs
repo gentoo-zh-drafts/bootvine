@@ -27,7 +27,7 @@ pub enum ScreenInput {
     Frame,
     PromptCheck,
     ConsoleUpkeep,
-    FullRepaint,
+    ConsoleOverwritten,
     PasswordRequests,
     Terminate,
     Failed(Error),
@@ -77,6 +77,8 @@ pub trait ConsoleDesk {
     }
 
     fn stay_in_front(&mut self) {}
+
+    fn forget_own_writes(&mut self) {}
 }
 
 struct CachedProjection {
@@ -158,7 +160,7 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
                 self.request_refresh(refresh);
                 ControlFlow::Continue(())
             }
-            ScreenInput::FullRepaint => {
+            ScreenInput::ConsoleOverwritten => {
                 self.request_refresh(Refresh::Repaint);
                 ControlFlow::Continue(())
             }
@@ -247,7 +249,10 @@ impl<Desk: ConsoleDesk> WatchScreen<Desk> {
             return ControlFlow::Continue(());
         }
         match self.draw(terminal) {
-            Ok(()) => ControlFlow::Continue(()),
+            Ok(()) => {
+                self.desk.forget_own_writes();
+                ControlFlow::Continue(())
+            }
             Err(error) => ControlFlow::Break(WatchEnding::Failed(error)),
         }
     }

@@ -106,6 +106,10 @@ fn encode_machine_recording(
     Ok(())
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the task checks it runs from the repository root"
+)]
 pub fn record_screencasts(vm_check_outputs: &Path) -> Result<(), TaskError> {
     if !TAPES.iter().all(|tape| Path::new(tape).is_file()) {
         return Err(TaskError::NotInRepositoryRoot);

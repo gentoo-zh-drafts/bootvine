@@ -3,11 +3,12 @@ use std::{
     io, mem,
     ops::ControlFlow,
     path::{Path, PathBuf},
+    rc::Rc,
     time::Duration,
 };
 
 use crossterm::event::Event;
-use futures::{Stream, StreamExt, channel::mpsc::UnboundedSender};
+use futures::{Stream, StreamExt, channel::mpsc::UnboundedSender, stream};
 use rustix::stdio::stdin;
 use tracing::{info, warn};
 
@@ -22,7 +23,10 @@ use crate::{
         },
         passphrase_input::asks_to_quit,
         resume_console::{RESUME_CONSOLE_MARKER, resume_console_is_open},
-        stream_sources::{DirectoryChange, DirectoryWatch, items_when_readable},
+        stream_sources::{
+            ConsoleContentWatch, DirectoryChange, DirectoryWatch, console_overwrite_inputs,
+            items_when_readable,
+        },
         watch_screen::{ConsoleDesk, Refresh, ScreenInput, WatchEnding},
     },
     systemd_link::systemd_bus::{Scope, Session},
@@ -41,6 +45,33 @@ pub struct LiveDesk {
     console_was_lent: bool,
     prompt_checks: Option<UnboundedSender<()>>,
     watched_request: Option<PathBuf>,
+    console_contents: ConsoleContents,
+}
+
+#[derive(Clone)]
+pub enum ConsoleContents {
+    Watched(Rc<ConsoleContentWatch>),
+    Unwatched,
+}
+
+impl ConsoleContents {
+    fn of(stdin_terminal: StdinTerminal) -> Self {
+        let StdinTerminal::VirtualConsole(console_number) = stdin_terminal else {
+            info!("not on a virtual console, not watching for writes by other programs");
+            return Self::Unwatched;
+        };
+        Self::Watched(
+            ConsoleContentWatch::open(console_number)
+                .expect("the contents of bootvine's virtual console are readable"),
+        )
+    }
+
+    pub fn overwrite_inputs(self) -> impl Stream<Item = ScreenInput> {
+        match self {
+            Self::Watched(watch) => console_overwrite_inputs(watch).left_stream(),
+            Self::Unwatched => stream::pending().right_stream(),
+        }
+    }
 }
 
 impl LiveDesk {
@@ -69,7 +100,13 @@ impl LiveDesk {
             console_was_lent: false,
             prompt_checks,
             watched_request: None,
+            console_contents: ConsoleContents::of(stdin_terminal),
         }
+    }
+
+    #[must_use]
+    pub fn console_contents(&self) -> ConsoleContents {
+        self.console_contents.clone()
     }
 
     fn watch_entry_until_abandoned(&mut self) {
@@ -194,6 +231,12 @@ impl ConsoleDesk for LiveDesk {
         self.foreground.stay_switched();
     }
 
+    fn forget_own_writes(&mut self) {
+        if let ConsoleContents::Watched(watch) = &self.console_contents {
+            watch.forget_own_writes();
+        }
+    }
+
     fn lends_console(&mut self) -> bool {
         self.console_lent
     }
@@ -247,6 +290,7 @@ mod tests {
             console_was_lent: false,
             prompt_checks: None,
             watched_request: None,
+            console_contents: ConsoleContents::Unwatched,
         }
     }
 

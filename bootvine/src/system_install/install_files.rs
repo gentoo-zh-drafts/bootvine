@@ -301,6 +301,10 @@ pub fn install_files(options: &InstallOptions) -> Result<(), InstallError> {
     Ok(())
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "install looks at what an earlier install put in place"
+)]
 fn installed_initrd_hooks(target: &InstallTarget) -> Vec<InitrdGenerator> {
     INITRD_GENERATORS
         .into_iter()
@@ -312,6 +316,10 @@ fn installed_initrd_hooks(target: &InstallTarget) -> Vec<InitrdGenerator> {
         .collect()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "uninstall looks at what install put in place"
+)]
 pub fn uninstall_files(options: &UninstallOptions) -> Result<(), InstallError> {
     let target = &options.target;
     if target.needs_sudo() {

@@ -4,19 +4,21 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     iter,
     os::fd::{AsRawFd, OwnedFd, RawFd},
+    rc::Rc,
     time::Duration,
 };
 
 use crossterm::event::{self, Event};
 use futures::{FutureExt, Stream, StreamExt, future::ready, stream};
 use rustix::{
+    event::{PollFd, PollFlags, Timespec, poll},
     fs::inotify::{self, CreateFlags, WatchFlags},
-    io::{Errno, read},
+    io::{Errno, pread, read},
 };
 use tokio::{
     io::{Interest, unix::AsyncFd},
     signal::unix::{SignalKind, signal},
-    time::{Interval, MissedTickBehavior, interval, timeout},
+    time::{Interval, MissedTickBehavior, interval},
 };
 use tracing::info;
 
@@ -86,6 +88,50 @@ fn watched_foreground_terminal() -> io::Result<AsyncFd<File>> {
     let mut attribute = File::open(FOREGROUND_TERMINAL_STATE)?;
     rearm_attribute(&mut attribute)?;
     Ok(unsafe { AsyncFd::register_with_interest(attribute, Interest::PRIORITY) }?)
+}
+
+pub struct ConsoleContentWatch {
+    contents: AsyncFd<File>,
+}
+
+impl ConsoleContentWatch {
+    pub fn open(console_number: u16) -> io::Result<Rc<Self>> {
+        let contents = File::open(format!("/dev/vcs{console_number}"))?;
+        let watch = Self {
+            contents: unsafe { AsyncFd::register_with_interest(contents, Interest::PRIORITY) }?,
+        };
+        watch.forget_own_writes();
+        Ok(Rc::new(watch))
+    }
+
+    pub fn forget_own_writes(&self) {
+        pread(self.contents.get_ref(), &mut [0_u8; 1], 0)
+            .expect("the contents of bootvine's console stay readable");
+    }
+
+    fn overwritten_since_forgotten(&self) -> bool {
+        let mut watched = [PollFd::new(self.contents.get_ref(), PollFlags::PRI)];
+        poll(&mut watched, Some(&Timespec::default()))
+            .expect("polling the contents of bootvine's console succeeds");
+        watched[0].revents().contains(PollFlags::PRI)
+    }
+}
+
+pub fn console_overwrite_inputs(watch: Rc<ConsoleContentWatch>) -> impl Stream<Item = ScreenInput> {
+    stream::unfold(watch, |watch| async move {
+        loop {
+            let mut readiness = watch
+                .contents
+                .ready(Interest::PRIORITY)
+                .await
+                .expect("the runtime keeps polling the contents of bootvine's console");
+            readiness.clear_ready();
+            drop(readiness);
+            if watch.overwritten_since_forgotten() {
+                return Some((ScreenInput::ConsoleOverwritten, watch));
+            }
+        }
+    })
 }
 
 pub fn terminal_switch_inputs() -> impl Stream<Item = ScreenInput> {
@@ -163,14 +209,6 @@ pub fn items_when_readable<Source: AsRawFd, Item>(
             Some(read(readiness.get_ref()))
         })
     }))
-}
-
-pub async fn readable_or_timeout<Source: AsRawFd>(readiness: &AsyncFd<Source>, patience: Duration) {
-    if let Ok(ready) = timeout(patience, readiness.readable()).await {
-        ready
-            .expect("the runtime keeps polling a registered descriptor")
-            .clear_ready();
-    }
 }
 
 fn steady_interval(period: Duration) -> Interval {

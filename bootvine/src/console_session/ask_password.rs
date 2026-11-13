@@ -288,6 +288,11 @@ impl PasswordEntry {
         })
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an answered request's file disappears; this check moves into the pure prompt \
+                  once requests arrive as messages"
+    )]
     fn is_live(&self, requests_changed: bool) -> bool {
         self.request.status() == PromptStatus::Awaited
             && (!requests_changed || self.request.file.exists())

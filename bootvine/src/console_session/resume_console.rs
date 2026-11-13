@@ -51,6 +51,10 @@ impl Command for ReleaseScrolling {
 }
 
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the resume console marker is a file the hibernate-resume drop-in creates"
+)]
 pub fn resume_console_is_open(marker: &Path) -> bool {
     marker.exists()
 }

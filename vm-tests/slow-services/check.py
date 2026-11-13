@@ -33,6 +33,10 @@ wait_for_screen("Stage 2", "sample-database")
 assert_bootvine_in_front()
 assert_text_visible(font_has_512_glyphs=True)
 assert console_level() == "1", f"stage 2 sysctl reopened the kernel console: {console_level()}"
+assert "Welcome to" not in screen(), f"PID 1's banner from the root switch is left on screen:\n{screen()}"
+FOREIGN_WRITE = "WRITTEN BY ANOTHER PROGRAM"
+machine.succeed(f"printf '\\033[20;5H{FOREIGN_WRITE}' > /dev/tty{BOOTVINE_TERMINAL}")
+retry(lambda _: FOREIGN_WRITE not in screen(), timeout_seconds=10)
 
 machine.wait_for_unit("greetd.service")
 retry(lambda _: "another program took the console" in bootvine_journal(), timeout_seconds=60)

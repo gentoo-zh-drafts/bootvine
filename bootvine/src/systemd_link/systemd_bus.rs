@@ -21,9 +21,7 @@ use tokio::{
 
 use crate::{
     boot_model::{Activity, JobKind, JobResult, SHELL_UNITS, UnitFacts, UnitKind, UnitTimeouts},
-    console_session::stream_sources::{
-        CarriedItem, readable_or_timeout, readable_source, unfold_carrying,
-    },
+    console_session::stream_sources::{CarriedItem, readable_source, unfold_carrying},
     systemd_link::link_error::Error,
 };
 
@@ -438,17 +436,11 @@ impl BusConnection {
             .read1()?)
     }
 
-    pub async fn wait_for_signals(&self, patience: Option<Duration>) {
-        if !self.early_signals.is_empty() {
-            return;
-        }
-        match patience {
-            Some(patience) => readable_or_timeout(&self.session, patience).await,
-            None => {
-                if let Ok(mut readiness) = self.session.readable().await {
-                    readiness.clear_ready();
-                }
-            }
+    pub async fn wait_for_signals(&self) {
+        if self.early_signals.is_empty()
+            && let Ok(mut readiness) = self.session.readable().await
+        {
+            readiness.clear_ready();
         }
     }
 

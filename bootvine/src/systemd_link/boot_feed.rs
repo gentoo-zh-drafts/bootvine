@@ -38,7 +38,6 @@ use crate::{
 };
 
 const RECONNECT_PATIENCE: Duration = Duration::from_secs(60);
-const ROOT_SWITCH_REPAINT_INTERVAL: Duration = Duration::from_millis(100);
 const JOURNAL_SETTLING_PATIENCE: Duration = Duration::from_secs(1);
 const LOG_LINES_KEPT: usize = 6;
 const SWITCH_ROOT_UNIT: &str = "initrd-switch-root.service";
@@ -118,11 +117,10 @@ fn queued_units(signals: &[Signal]) -> impl Iterator<Item = &str> {
     })
 }
 
-fn connected_inputs(changes: Vec<BootChange>, switching_root: bool) -> Vec<ScreenInput> {
+fn connected_inputs(changes: Vec<BootChange>) -> Vec<ScreenInput> {
     (!changes.is_empty())
         .then_some(ScreenInput::Boot(changes))
         .into_iter()
-        .chain(switching_root.then_some(ScreenInput::FullRepaint))
         .collect()
 }
 
@@ -175,11 +173,10 @@ impl BusFeed {
             }
             Link::Connected(connection) => {
                 let received = self.tracker.receive(connection).await;
-                let switching_root = matches!(self.tracker.root_switch, RootSwitch::Queued(_));
                 Some(match received {
                     Ok(mut changes) => {
                         changes.extend(self.tracker.finished_journal_reads());
-                        connected_inputs(changes, switching_root)
+                        connected_inputs(changes)
                     }
                     Err(_) => self.lose_connection(),
                 })
@@ -199,10 +196,10 @@ impl BusFeed {
 
     async fn connect(&mut self, deadline: Instant, attempt: ConnectAttempt) -> Vec<ScreenInput> {
         match self.open_watched(attempt).await {
-            Ok(changes) => vec![ScreenInput::Boot(changes), ScreenInput::FullRepaint],
+            Ok(changes) => vec![ScreenInput::Boot(changes)],
             Err(_) if Instant::now() < deadline => {
                 sleep(BACKGROUND_CHECK_INTERVAL).await;
-                vec![ScreenInput::FullRepaint]
+                Vec::new()
             }
             Err(_) => {
                 self.link = Link::Finished;
@@ -238,14 +235,12 @@ impl BusFeed {
 
 impl BootTracker {
     async fn wait_for_bus_or_journal(&mut self, connection: &BusConnection) -> Vec<BootChange> {
-        let patience = matches!(self.root_switch, RootSwitch::Queued(_))
-            .then_some(ROOT_SWITCH_REPAINT_INTERVAL);
         if self.pending_journal_reads.is_empty() {
-            connection.wait_for_signals(patience).await;
+            connection.wait_for_signals().await;
             return Vec::new();
         }
         match select(
-            pin!(connection.wait_for_signals(patience)),
+            pin!(connection.wait_for_signals()),
             self.pending_journal_reads.next(),
         )
         .await
@@ -604,18 +599,10 @@ mod tests {
     }
 
     #[test]
-    fn the_screen_is_repainted_only_while_the_root_switches() {
-        assert!(connected_inputs(Vec::new(), false).is_empty());
+    fn only_batches_with_changes_reach_the_screen() {
+        assert!(connected_inputs(Vec::new()).is_empty());
         assert!(matches!(
-            connected_inputs(Vec::new(), true).as_slice(),
-            [ScreenInput::FullRepaint]
-        ));
-        assert!(matches!(
-            connected_inputs(vec![BootChange::ForgetJobs], true).as_slice(),
-            [ScreenInput::Boot(_), ScreenInput::FullRepaint]
-        ));
-        assert!(matches!(
-            connected_inputs(vec![BootChange::ForgetJobs], false).as_slice(),
+            connected_inputs(vec![BootChange::ForgetJobs]).as_slice(),
             [ScreenInput::Boot(_)]
         ));
     }
