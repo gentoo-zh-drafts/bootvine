@@ -272,7 +272,7 @@ impl Heights {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct BootProjection {
     pub forest: Vec<TreeNode>,
     pub milestones: Vec<MilestoneRow>,

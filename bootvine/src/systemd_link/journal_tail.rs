@@ -46,6 +46,7 @@ pub async fn settled_unit_messages(unit: String, wanted: usize, patience: Durati
 fn read_settled_messages(unit: &str, wanted: usize, deadline: Instant) -> io::Result<Vec<String>> {
     let mut journal = OpenOptions::default().open()?;
     match_unit_in_this_boot(&mut journal, unit)?;
+    journal.fd()?;
     loop {
         let messages = scan_newest_messages(&mut journal, wanted)?;
         let remaining = deadline

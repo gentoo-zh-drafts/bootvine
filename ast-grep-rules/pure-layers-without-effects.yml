@@ -13,11 +13,29 @@ files:
 rule:
   any:
     - kind: scoped_identifier
-      regex: ^(::)?(std::(fs|env|process|thread|net|os::unix|time::(Instant|SystemTime))|tokio|rustix|dbus|systemd|crossterm)(::|$)
+      regex: ^(::)?(std::(fs|env|process|thread|net|os::unix|time::(Instant|SystemTime))|tokio|rustix|dbus|systemd|crossterm::(execute|queue|terminal|cursor|event::(read|poll)))(::|$)
     - kind: scoped_use_list
       has:
         field: path
-        regex: ^(::)?(tokio|rustix|dbus|systemd|crossterm|std::os::unix)$
+        regex: ^(::)?(tokio|rustix|dbus|systemd|std::os::unix)$
+    - kind: identifier
+      regex: ^(execute|queue|terminal|cursor)$
+      inside:
+        kind: use_list
+        inside:
+          kind: scoped_use_list
+          has:
+            field: path
+            regex: ^(::)?crossterm$
+    - kind: identifier
+      regex: ^(read|poll)$
+      inside:
+        kind: use_list
+        inside:
+          kind: scoped_use_list
+          has:
+            field: path
+            regex: ^(::)?crossterm::event$
     - kind: identifier
       regex: ^(fs|env|process|thread|net)$
       inside:

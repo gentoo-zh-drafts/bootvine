@@ -19,12 +19,10 @@ use tracing::info;
 use crate::{
     boot_model::{
         ActiveState, Activity, BootChange, BootState, FailureCause, HANDOFF_UNIT, JobKind,
-        JobResult, Phase, UnitFacts,
+        JobResult, Phase, UnitFacts, UnitTimeouts,
     },
-    console_session::{
-        stream_sources::{BACKGROUND_CHECK_INTERVAL, CarriedItem, unfold_carrying},
-        watch_screen::ScreenInput,
-    },
+    console_session::stream_sources::{BACKGROUND_CHECK_INTERVAL, CarriedItem, unfold_carrying},
+    screen_components::screen_app::Msg,
     systemd_link::{
         journal_tail::settled_unit_messages,
         link_error::Error,
@@ -117,9 +115,9 @@ fn queued_units(signals: &[Signal]) -> impl Iterator<Item = &str> {
     })
 }
 
-fn connected_inputs(changes: Vec<BootChange>) -> Vec<ScreenInput> {
+fn connected_inputs(changes: Vec<BootChange>) -> Vec<Msg> {
     (!changes.is_empty())
-        .then_some(ScreenInput::Boot(changes))
+        .then_some(Msg::Boot(changes))
         .into_iter()
         .collect()
 }
@@ -163,7 +161,7 @@ impl BusFeed {
         }
     }
 
-    async fn next_inputs(&mut self) -> Option<Vec<ScreenInput>> {
+    async fn next_inputs(&mut self) -> Option<Vec<Msg>> {
         match &mut self.link {
             Link::Finished => None,
             Link::Connecting { deadline, attempt } => {
@@ -194,34 +192,35 @@ impl BusFeed {
         Ok(changes)
     }
 
-    async fn connect(&mut self, deadline: Instant, attempt: ConnectAttempt) -> Vec<ScreenInput> {
+    async fn connect(&mut self, deadline: Instant, attempt: ConnectAttempt) -> Vec<Msg> {
         match self.open_watched(attempt).await {
-            Ok(changes) => vec![ScreenInput::Boot(changes)],
+            Ok(changes) => vec![Msg::Boot(changes)],
             Err(_) if Instant::now() < deadline => {
                 sleep(BACKGROUND_CHECK_INTERVAL).await;
                 Vec::new()
             }
             Err(_) => {
                 self.link = Link::Finished;
-                vec![ScreenInput::Failed(Error::ManagerUnreachable)]
+                vec![Msg::Failed(Error::ManagerUnreachable)]
             }
         }
     }
 
-    fn lose_connection(&mut self) -> Vec<ScreenInput> {
+    fn lose_connection(&mut self) -> Vec<Msg> {
         let at = monotonic_now();
         let tracker = &mut self.tracker;
         let RootSwitch::Queued(sysroot) = &tracker.root_switch else {
             if tracker.phase == Phase::Shutdown {
                 self.link = Link::Finished;
-                return vec![ScreenInput::Boot(vec![BootChange::ManagerExited { at }])];
+                return vec![Msg::Boot(vec![BootChange::ManagerExited { at }])];
             }
+            tracker.unit_paths.clear();
             self.link = Link::connecting(ConnectAttempt::Again);
-            return vec![ScreenInput::Boot(vec![BootChange::ForgetJobs])];
+            return vec![Msg::Boot(vec![BootChange::ForgetJobs])];
         };
         if let Err(error) = sysroot.enter() {
             self.link = Link::Finished;
-            return vec![ScreenInput::Failed(error.into())];
+            return vec![Msg::Failed(error.into())];
         }
         tracker.root_switch = RootSwitch::NotQueued;
         tracker.unit_paths.clear();
@@ -229,7 +228,7 @@ impl BusFeed {
         tracker.units_in_failed_state.clear();
         tracker.phase = Phase::Host;
         self.link = Link::connecting(ConnectAttempt::Again);
-        vec![ScreenInput::Boot(vec![BootChange::SwitchRoot { at }])]
+        vec![Msg::Boot(vec![BootChange::SwitchRoot { at }])]
     }
 }
 
@@ -542,6 +541,32 @@ impl BootTracker {
             .collect()
     }
 
+    async fn reload(
+        &mut self,
+        connection: &mut BusConnection,
+        unit: &str,
+    ) -> Result<TrackedUnit, Error> {
+        let UnitLookup::Loaded(fetched) = connection.load_unit(unit).await? else {
+            return Ok(TrackedUnit::New {
+                facts: UnitFacts {
+                    name: unit.to_owned(),
+                    description: None,
+                    after: Vec::new(),
+                    before: Vec::new(),
+                    timeouts: UnitTimeouts::default(),
+                },
+                activity: Activity::default(),
+            });
+        };
+        let FetchedUnit {
+            path,
+            facts,
+            activity,
+        } = *fetched;
+        self.unit_paths.insert(path, facts.name.clone());
+        Ok(TrackedUnit::New { facts, activity })
+    }
+
     async fn queue_new_job(
         &mut self,
         connection: &mut BusConnection,
@@ -554,7 +579,10 @@ impl BootTracker {
         if kind == JobKind::TakesDown && self.phase != Phase::Shutdown {
             return Ok(Vec::new());
         }
-        let tracked = self.track(connection, &unit).await?;
+        let tracked = match self.track(connection, &unit).await? {
+            TrackedUnit::NotLoaded(unloaded) => self.reload(connection, &unloaded).await?,
+            tracked => tracked,
+        };
         let unit = tracked.name().to_owned();
         Ok(tracked
             .into_change()
@@ -564,11 +592,7 @@ impl BootTracker {
     }
 }
 
-pub fn bus_inputs(
-    phase: Phase,
-    scope: Scope,
-    target: RootRequest,
-) -> impl Stream<Item = ScreenInput> {
+pub fn bus_inputs(phase: Phase, scope: Scope, target: RootRequest) -> impl Stream<Item = Msg> {
     unfold_carrying(BusFeed::new(phase, scope, target), |mut feed| async move {
         let inputs = feed.next_inputs().await?;
         Some(CarriedItem {
@@ -603,7 +627,7 @@ mod tests {
         assert!(connected_inputs(Vec::new()).is_empty());
         assert!(matches!(
             connected_inputs(vec![BootChange::ForgetJobs]).as_slice(),
-            [ScreenInput::Boot(_)]
+            [Msg::Boot(_)]
         ));
     }
 

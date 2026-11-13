@@ -1,11 +1,11 @@
 pub mod ask_password;
 pub mod console_palette;
 pub mod console_takeover;
-pub mod live_desk;
+pub mod live_runtime;
 pub mod origin_reading;
 pub mod passphrase_input;
 pub mod resume_console;
 pub mod saved_console_state;
+pub mod screen_loop;
 pub mod stream_sources;
 pub mod watch_loop;
-pub mod watch_screen;

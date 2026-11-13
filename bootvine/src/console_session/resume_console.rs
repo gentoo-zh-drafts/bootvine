@@ -21,7 +21,7 @@ use ratatui::{
 };
 use rustix::termios::tcgetwinsize;
 
-use crate::console_session::{stream_sources::FRAME_INTERVAL, watch_screen::overwrite_every_cell};
+use crate::console_session::{screen_loop::overwrite_every_cell, stream_sources::FRAME_INTERVAL};
 
 pub const RESUME_CONSOLE_DIRECTORY: &str = "/run/bootvine";
 pub const RESUME_CONSOLE_MARKER: &str = "/run/bootvine/resume-console-open";

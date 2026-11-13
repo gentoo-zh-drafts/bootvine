@@ -3,6 +3,7 @@ valid:
   - "use std::{collections::HashMap, iter::once, time::Duration};"
   - "use ratatui::{buffer::Buffer, widgets::Widget};"
   - "use crate::boot_model::BootState;"
+  - "use crossterm::event::{Event, KeyCode, KeyEvent};"
   - "fn elapsed(now: Duration, origin: Duration) -> Duration { now.saturating_sub(origin) }"
 invalid:
   - "use std::fs::read_to_string;"
@@ -13,6 +14,10 @@ invalid:
   - "use rustix::system::uname;"
   - "use rustix::{fs, io};"
   - "use tokio::time::sleep;"
+  - "use crossterm::terminal::size;"
+  - "use crossterm::{execute, style::ResetColor};"
+  - "use crossterm::event::poll;"
+  - "use crossterm::event::{self, Event, read};"
   - "use std::os::unix::net::UnixDatagram;"
   - "fn command_line() -> String { std::fs::read_to_string(\"/proc/cmdline\").unwrap_or_default() }"
   - "async fn later() {}"

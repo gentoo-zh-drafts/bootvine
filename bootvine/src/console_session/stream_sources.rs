@@ -4,6 +4,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     iter,
     os::fd::{AsRawFd, OwnedFd, RawFd},
+    path::Path,
     rc::Rc,
     time::Duration,
 };
@@ -22,7 +23,12 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::console_session::{resume_console::RESUME_CONSOLE_DIRECTORY, watch_screen::ScreenInput};
+use crate::{
+    console_session::resume_console::{
+        RESUME_CONSOLE_DIRECTORY, RESUME_CONSOLE_MARKER, resume_console_is_open,
+    },
+    screen_components::{console_claim::MarkerPresence, screen_app::Msg},
+};
 
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 pub const BACKGROUND_CHECK_INTERVAL: Duration = Duration::from_millis(100);
@@ -78,10 +84,20 @@ impl AsRawFd for DirectoryWatch {
     }
 }
 
-fn rearm_attribute(attribute: &mut File) -> io::Result<()> {
+fn rearm_attribute(attribute: &mut File) -> io::Result<String> {
     attribute.seek(SeekFrom::Start(0))?;
-    attribute.read_to_end(&mut Vec::new())?;
-    Ok(())
+    let mut contents = String::new();
+    attribute.read_to_string(&mut contents)?;
+    Ok(contents)
+}
+
+fn active_console_number(attribute: &str) -> u16 {
+    attribute
+        .trim()
+        .strip_prefix("tty")
+        .expect("the foreground console attribute names a ttyN device")
+        .parse()
+        .expect("virtual console numbers fit in sixteen bits")
 }
 
 fn watched_foreground_terminal() -> io::Result<AsyncFd<File>> {
@@ -117,7 +133,7 @@ impl ConsoleContentWatch {
     }
 }
 
-pub fn console_overwrite_inputs(watch: Rc<ConsoleContentWatch>) -> impl Stream<Item = ScreenInput> {
+pub fn console_overwrite_inputs(watch: Rc<ConsoleContentWatch>) -> impl Stream<Item = Msg> {
     stream::unfold(watch, |watch| async move {
         loop {
             let mut readiness = watch
@@ -128,13 +144,13 @@ pub fn console_overwrite_inputs(watch: Rc<ConsoleContentWatch>) -> impl Stream<I
             readiness.clear_ready();
             drop(readiness);
             if watch.overwritten_since_forgotten() {
-                return Some((ScreenInput::ConsoleOverwritten, watch));
+                return Some((Msg::ConsoleOverwritten, watch));
             }
         }
     })
 }
 
-pub fn terminal_switch_inputs() -> impl Stream<Item = ScreenInput> {
+pub fn terminal_switch_inputs() -> impl Stream<Item = Msg> {
     let watched = match watched_foreground_terminal() {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             info!("the kernel has no virtual consoles, not following console switches");
@@ -143,21 +159,24 @@ pub fn terminal_switch_inputs() -> impl Stream<Item = ScreenInput> {
         opened => opened.expect("the foreground console attribute is readable"),
     };
     stream::unfold(watched, |mut watched| async move {
-        {
+        let attribute = {
             let mut readiness = watched
                 .ready_mut(Interest::PRIORITY)
                 .await
                 .expect("the runtime keeps polling the foreground console attribute");
             readiness.clear_ready();
             rearm_attribute(readiness.get_inner_mut())
-                .expect("the foreground console attribute stays readable");
-        }
-        Some((ScreenInput::ConsoleUpkeep, watched))
+                .expect("the foreground console attribute stays readable")
+        };
+        Some((
+            Msg::TerminalActivated(active_console_number(&attribute)),
+            watched,
+        ))
     })
     .left_stream()
 }
 
-pub fn resume_marker_inputs() -> impl Stream<Item = ScreenInput> {
+pub fn resume_marker_inputs() -> impl Stream<Item = Msg> {
     let watch = match DirectoryWatch::open(RESUME_CONSOLE_DIRECTORY) {
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
             info!(
@@ -171,7 +190,15 @@ pub fn resume_marker_inputs() -> impl Stream<Item = ScreenInput> {
     items_when_readable(watch, DirectoryWatch::changed)
         .expect("the runtime accepts an inotify descriptor")
         .filter(|change| ready(*change == DirectoryChange::Changed))
-        .map(|_| ScreenInput::ConsoleUpkeep)
+        .map(|_| {
+            Msg::ResumeMarker(
+                if resume_console_is_open(Path::new(RESUME_CONSOLE_MARKER)) {
+                    MarkerPresence::Present
+                } else {
+                    MarkerPresence::Absent
+                },
+            )
+        })
         .left_stream()
 }
 
@@ -217,16 +244,13 @@ fn steady_interval(period: Duration) -> Interval {
     ticks
 }
 
-pub fn periodic_inputs(
-    period: Duration,
-    input: fn() -> ScreenInput,
-) -> impl Stream<Item = ScreenInput> {
+pub fn periodic_inputs(period: Duration, input: fn() -> Msg) -> impl Stream<Item = Msg> {
     let mut ticks = steady_interval(period);
     stream::poll_fn(move |context| ticks.poll_tick(context).map(|_| Some(input())))
 }
 
-pub fn frame_inputs() -> impl Stream<Item = ScreenInput> {
-    periodic_inputs(FRAME_INTERVAL, || ScreenInput::Frame)
+pub fn frame_inputs() -> impl Stream<Item = Msg> {
+    periodic_inputs(FRAME_INTERVAL, || Msg::Tick)
 }
 
 fn drain_terminal_events() -> io::Result<Vec<Event>> {
@@ -238,14 +262,14 @@ fn drain_terminal_events() -> io::Result<Vec<Event>> {
     .collect()
 }
 
-fn terminal_inputs(drained: io::Result<Vec<Event>>) -> Vec<ScreenInput> {
+fn terminal_inputs(drained: io::Result<Vec<Event>>) -> Vec<Msg> {
     match drained {
-        Ok(events) => events.into_iter().map(ScreenInput::Key).collect(),
-        Err(error) => vec![ScreenInput::Failed(error.into())],
+        Ok(events) => events.into_iter().map(Msg::KeyPressed).collect(),
+        Err(error) => vec![Msg::Failed(error.into())],
     }
 }
 
-pub fn key_inputs() -> io::Result<impl Stream<Item = ScreenInput>> {
+pub fn key_inputs() -> io::Result<impl Stream<Item = Msg>> {
     Ok(
         items_when_readable(io::stdin(), |_| drain_terminal_events())?
             .map(terminal_inputs)
@@ -253,10 +277,10 @@ pub fn key_inputs() -> io::Result<impl Stream<Item = ScreenInput>> {
     )
 }
 
-pub fn termination_inputs() -> io::Result<impl Stream<Item = ScreenInput>> {
+pub fn termination_inputs() -> io::Result<impl Stream<Item = Msg>> {
     let mut terminate = signal(SignalKind::terminate())?;
     Ok(stream::once(async move {
         terminate.recv().await;
-        ScreenInput::Terminate
+        Msg::Terminated
     }))
 }

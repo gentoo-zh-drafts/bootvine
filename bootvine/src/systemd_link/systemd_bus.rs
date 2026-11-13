@@ -21,7 +21,9 @@ use tokio::{
 use tracing::error;
 
 use crate::{
-    boot_model::{Activity, JobKind, JobResult, SHELL_UNITS, UnitFacts, UnitKind, UnitTimeouts},
+    boot_model::{
+        Activity, HANDOFF_UNIT, JobKind, JobResult, SHELL_UNITS, UnitFacts, UnitKind, UnitTimeouts,
+    },
     console_session::stream_sources::{CarriedItem, readable_source, unfold_carrying},
     systemd_link::link_error::Error,
 };
@@ -268,6 +270,23 @@ impl Session {
         read_boot_in_progress(&self.blocking_call(boot_in_progress_call()?)?)
     }
 
+    pub fn display_manager_running(&self) -> Result<bool, Error> {
+        let path: Path<'static> =
+            match self.blocking_call(manager_call("GetUnit", (HANDOFF_UNIT,))?) {
+                Err(Error::Bus(bus_error)) if bus_error.name() == Some(NO_SUCH_UNIT) => {
+                    return Ok(false);
+                }
+                answered => answered?.read1()?,
+            };
+        let state: Variant<String> = self
+            .blocking_call(property_call(&path, UNIT_INTERFACE, "ActiveState")?)?
+            .read1()?;
+        Ok(matches!(
+            state.0.as_str(),
+            "active" | "activating" | "reloading"
+        ))
+    }
+
     pub fn shell_is_starting(&self) -> Result<bool, Error> {
         let reply = self.blocking_call(manager_call("ListJobs", ())?)?;
         let listed: Vec<ListedJob> = reply.read1()?;
@@ -422,17 +441,38 @@ impl BusConnection {
             }
             answered => answered?.read1()?,
         };
+        self.lookup_at(name, path).await
+    }
+
+    pub async fn load_unit(&mut self, name: &str) -> Result<UnitLookup, Error> {
+        let path: Path<'static> = self
+            .call(manager_call("LoadUnit", (name,))?)
+            .await?
+            .read1()?;
+        self.lookup_at(name, path).await
+    }
+
+    async fn lookup_at(&mut self, name: &str, path: Path<'static>) -> Result<UnitLookup, Error> {
+        match self.unit_at(name, path).await {
+            Err(Error::Bus(bus_error)) if bus_error.name() == Some(UNKNOWN_OBJECT) => {
+                Ok(UnitLookup::NotLoaded)
+            }
+            fetched => Ok(UnitLookup::Loaded(Box::new(fetched?))),
+        }
+    }
+
+    async fn unit_at(&mut self, name: &str, path: Path<'static>) -> Result<FetchedUnit, Error> {
         let properties = self.all_properties(&path, UNIT_INTERFACE).await?;
         let kind_properties =
             match kind_interface(UnitKind::from(unit_id(name, &properties).as_str())) {
                 Some(interface) => self.all_properties(&path, interface).await?,
                 None => PropMap::new(),
             };
-        Ok(UnitLookup::Loaded(Box::new(FetchedUnit {
+        Ok(FetchedUnit {
             facts: unit_facts_from(name, &properties, &kind_properties),
             activity: Activity::from(&properties),
             path,
-        })))
+        })
     }
 
     pub async fn failure_reason(&mut self, name: &str) -> Result<FailureReason, Error> {
@@ -445,8 +485,12 @@ impl BusConnection {
             }
             answered => answered?.read1()?,
         };
-        let properties = self.all_properties(&path, interface).await?;
-        Ok(FailureReason::from(&properties))
+        match self.all_properties(&path, interface).await {
+            Err(Error::Bus(bus_error)) if bus_error.name() == Some(UNKNOWN_OBJECT) => {
+                Ok(FailureReason::Unexplained)
+            }
+            properties => Ok(FailureReason::from(&properties?)),
+        }
     }
 
     async fn all_properties(&mut self, path: &Path<'_>, interface: &str) -> Result<PropMap, Error> {

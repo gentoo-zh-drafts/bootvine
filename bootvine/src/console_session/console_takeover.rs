@@ -13,6 +13,7 @@ use crate::{
         ask_password,
         console_palette::{ConsoleLook, ConsolePalette},
     },
+    screen_components::console_claim::KernelLevel,
     screen_settings::font_glyphs::Glyphs,
 };
 
@@ -119,6 +120,19 @@ impl KernelConsole {
             Self::LeftAsIs => KernelLoudness::Unchanged,
         }
     }
+
+    pub(super) fn level(&self) -> KernelLevel {
+        match self {
+            Self::Quieted(_)
+                if console_level().expect("printk stays readable once bootvine quieted it")
+                    == ALERTS_ONLY =>
+            {
+                KernelLevel::Quiet
+            }
+            Self::Quieted(_) => KernelLevel::Raised,
+            Self::LeftAsIs => KernelLevel::Untouched,
+        }
+    }
 }
 
 impl Drop for QuietKernelConsole {
@@ -223,7 +237,7 @@ pub(super) struct ForegroundVt {
     previous: u16,
 }
 
-pub(super) enum Foreground {
+pub(super) enum HeldTerminal {
     Holding(ForegroundVt),
     StayingBehind,
 }
@@ -269,7 +283,7 @@ impl ForegroundVt {
     }
 }
 
-impl Foreground {
+impl HeldTerminal {
     pub(super) fn take(terminal: StdinTerminal) -> Self {
         let StdinTerminal::VirtualConsole(own) = terminal else {
             return Self::StayingBehind;

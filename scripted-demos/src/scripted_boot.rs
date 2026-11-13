@@ -1,9 +1,11 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     io,
     iter::once,
     mem,
-    ops::ControlFlow,
+    path::PathBuf,
+    rc::Rc,
     time::Duration,
 };
 
@@ -12,21 +14,30 @@ use bootvine::{
         ActiveState, Activity, BootChange, BootState, FailureCause, JobKind, JobResult, Phase,
         UnitFacts, UnitTimeouts, boot_origin::BootOrigin,
     },
-    boot_view::PasswordPrompt,
     console_session::{
-        passphrase_input,
+        console_palette::ConsoleLook,
+        screen_loop::{ScreenRuntime, run_screen},
         stream_sources::{frame_inputs, key_inputs},
-        watch_screen::{ConsoleDesk, WatchEnding, WatchScreen, watch_until_ending},
+    },
+    screen_components::{
+        console_claim::{ConsoleClaim, Foreground, MarkerPresence, OwnConsole},
+        handover::{Handover, WatchEnding},
+        password_request::{PasswordRequest, PromptAsker, PromptDeadline, RequestHint},
+        prompt::Prompt,
+        screen_app::{Cmd, Model, Msg, Sub},
     },
     screen_settings::{color_scheme::Colors, config_file::Timing},
-    systemd_link::monotonic_clock::monotonic_now,
+    systemd_link::{monotonic_clock::monotonic_now, systemd_bus::Scope},
 };
-use futures::stream;
-use ratatui::{DefaultTerminal, crossterm::event::Event};
-use tokio::runtime::Builder;
-use zeroize::Zeroizing;
+use futures::{FutureExt, StreamExt, stream, stream::LocalBoxStream};
+use ratatui::DefaultTerminal;
+use tokio::{
+    runtime::Builder,
+    time::{interval, sleep},
+};
 
 const FINAL_FRAME: Duration = Duration::from_secs(3);
+const FRAME_TICK: Duration = Duration::from_millis(16);
 
 pub const DEMO_PASSPHRASE: &str = "demo";
 const DEMO_PASSPHRASE_HINT: &str = "This demo unlocks with the passphrase \"demo\"";
@@ -263,22 +274,22 @@ impl Script {
         })
     }
 
-    fn is_checking(&self, now: Duration) -> bool {
-        self.answer.is_some_and(|answer| now < answer.checked_at)
-    }
-
     fn was_rejected(&self, now: Duration) -> bool {
         self.answer
             .is_some_and(|answer| !answer.unlocks && now >= answer.checked_at)
     }
 
-    fn prompt(&self, typed: &str, now: Duration) -> Option<PasswordPrompt<'static>> {
-        Some(PasswordPrompt {
-            message: self.asking()?.asks?,
-            hint: Some(DEMO_PASSPHRASE_HINT),
-            input: passphrase_input::masked(typed),
-            sent: self.is_checking(now),
-            rejected: self.was_rejected(now),
+    fn asked_request(&self) -> Option<PasswordRequest> {
+        let step = self.asking()?;
+        Some(PasswordRequest {
+            file: PathBuf::from(step.unit),
+            message: step.asks?.to_owned(),
+            socket: PathBuf::new(),
+            echo: false,
+            silent: false,
+            not_after: PromptDeadline::Never,
+            asker: PromptAsker::Unnamed,
+            hint: RequestHint::Shown(DEMO_PASSPHRASE_HINT.to_owned()),
         })
     }
 
@@ -368,15 +379,16 @@ impl Script {
     }
 }
 
-struct DemoDesk {
+struct DemoBoot {
     script: Script,
     describe: fn(&str) -> Option<&'static str>,
     next_stage: &'static [Step],
     settled_at: Option<Duration>,
-    typed: Zeroizing<String>,
+    listed: Option<PasswordRequest>,
+    rejection_reported: bool,
 }
 
-impl DemoDesk {
+impl DemoBoot {
     fn enter_next_stage(&mut self, now: Duration) -> Vec<BootChange> {
         if !self.script.is_done() || self.next_stage.is_empty() {
             return Vec::new();
@@ -386,47 +398,110 @@ impl DemoDesk {
             .chain(self.script.opening_changes(self.describe, now))
             .collect()
     }
-}
 
-impl ConsoleDesk for DemoDesk {
-    fn frame_passed(&mut self, now: Duration) -> ControlFlow<WatchEnding, Vec<BootChange>> {
+    fn advance(&mut self, now: Duration) -> Vec<Msg> {
         let changes: Vec<BootChange> = self
             .script
             .advance(now)
             .into_iter()
             .chain(self.enter_next_stage(now))
             .collect();
-        if !self.script.is_done() {
-            return ControlFlow::Continue(changes);
-        }
-        let settled_at = *self.settled_at.get_or_insert(now);
-        if now
-            .checked_sub(settled_at)
-            .expect("frame times only move forward")
-            >= FINAL_FRAME
-        {
-            ControlFlow::Break(WatchEnding::BootCompleted)
-        } else {
-            ControlFlow::Continue(changes)
+        let asked = self.script.asked_request();
+        let listing = (asked != self.listed).then(|| {
+            self.listed.clone_from(&asked);
+            Msg::PasswordRequestsListed(asked.into_iter().collect())
+        });
+        let rejected = self.script.was_rejected(now) && !self.rejection_reported;
+        let rejection = rejected
+            .then(|| {
+                self.listed
+                    .as_ref()
+                    .map(|request| Msg::AnswerRejected(request.file.clone()))
+            })
+            .flatten();
+        self.rejection_reported |= rejected;
+        let ended = self.script.is_done() && {
+            let settled_at = *self.settled_at.get_or_insert(now);
+            now.checked_sub(settled_at)
+                .expect("frame times only move forward")
+                >= FINAL_FRAME
+        };
+        (!changes.is_empty())
+            .then_some(Msg::Boot(changes))
+            .into_iter()
+            .chain(listing)
+            .chain(rejection)
+            .chain(ended.then_some(Msg::BootSourceEnded))
+            .collect()
+    }
+}
+
+struct DemoRuntime {
+    boot: Rc<RefCell<DemoBoot>>,
+    epoch: Duration,
+}
+
+fn demo_now(epoch: Duration) -> Duration {
+    monotonic_now()
+        .checked_sub(epoch)
+        .expect("the demo clock starts before its first frame")
+}
+
+impl ScreenRuntime for DemoRuntime {
+    fn perform(&mut self, command: Cmd) -> Vec<Msg> {
+        match command {
+            Cmd::SendAnswer {
+                file, passphrase, ..
+            } => {
+                let mut boot = self.boot.borrow_mut();
+                boot.script
+                    .answer(passphrase.expose(), demo_now(self.epoch));
+                boot.rejection_reported = false;
+                vec![Msg::AnswerDelivered(file)]
+            }
+            Cmd::ReadOrigin => vec![Msg::OriginRead(demo_origin())],
+            Cmd::TakeForeground
+            | Cmd::ActivateOwnTerminal
+            | Cmd::QuietKernel
+            | Cmd::InspectConsole
+            | Cmd::AskShellStarting
+            | Cmd::AskDisplayManagerState
+            | Cmd::StayInFront => Vec::new(),
         }
     }
 
-    fn prompt(&self, now: Duration) -> Option<PasswordPrompt<'_>> {
-        self.script.prompt(&self.typed, now)
+    fn subscribe(&mut self, subscription: &Sub) -> LocalBoxStream<'static, Msg> {
+        let epoch = self.epoch;
+        match subscription {
+            Sub::BootFeed => {
+                let boot = Rc::clone(&self.boot);
+                let mut ticks = interval(FRAME_TICK);
+                stream::poll_fn(move |context| ticks.poll_tick(context).map(|_| Some(())))
+                    .flat_map(move |()| stream::iter(boot.borrow_mut().advance(demo_now(epoch))))
+                    .boxed_local()
+            }
+            Sub::Keys => match key_inputs() {
+                Ok(keys) => keys.boxed_local(),
+                Err(error) => stream::once(async move { Msg::Failed(error.into()) }).boxed_local(),
+            },
+            Sub::FrameTicks => frame_inputs().boxed_local(),
+            Sub::DeadlineAt(deadline) => {
+                let remaining = deadline
+                    .checked_sub(demo_now(epoch))
+                    .unwrap_or(Duration::ZERO);
+                stream::once(sleep(remaining).map(|()| Msg::DeadlinePassed)).boxed_local()
+            }
+            Sub::Termination
+            | Sub::PasswordRequests
+            | Sub::AbandonmentOf { .. }
+            | Sub::TerminalSwitches
+            | Sub::ResumeMarker
+            | Sub::ConsoleWrites => stream::pending().boxed_local(),
+        }
     }
 
-    fn press_key(&mut self, event: &Event, now: Duration) -> ControlFlow<WatchEnding> {
-        let asking = self.script.asking().is_some();
-        if passphrase_input::asks_to_quit(event, asking) {
-            return ControlFlow::Break(WatchEnding::ViewerLeft);
-        }
-        if asking
-            && !self.script.is_checking(now)
-            && let Some(submitted) = passphrase_input::type_key(&mut self.typed, event)
-        {
-            self.script.answer(&submitted, now);
-        }
-        ControlFlow::Continue(())
+    fn now(&self) -> Duration {
+        demo_now(self.epoch)
     }
 }
 
@@ -441,30 +516,49 @@ fn demo_origin() -> BootOrigin {
 
 async fn play_scenario(terminal: &mut DefaultTerminal, scenario: &Scenario) -> io::Result<()> {
     let script = Script::begin(scenario.steps, 1);
-    let mut state = BootState::new(scenario.phase);
+    let mut boot = BootState::new(scenario.phase);
     script
         .opening_changes(scenario.describe, Duration::ZERO)
         .into_iter()
-        .for_each(|change| state.apply(change));
-    let desk = DemoDesk {
-        script,
-        describe: scenario.describe,
-        next_stage: scenario.after_switch_root,
-        settled_at: None,
-        typed: passphrase_input::empty(),
+        .for_each(|change| boot.apply(change));
+    let mut model = Model {
+        boot,
+        origin: demo_origin(),
+        colors: Colors::default(),
+        timing: Timing {
+            keep_final_frame_for: FINAL_FRAME,
+            ..Timing::default()
+        },
+        scope: Scope::System,
+        prompt: Prompt::default(),
+        console: ConsoleClaim::new(
+            OwnConsole::Elsewhere,
+            Foreground::Holding,
+            MarkerPresence::Absent,
+            ConsoleLook::default(),
+        ),
+        handover: Handover::Watching,
     };
-    let mut screen = WatchScreen::new(
-        state,
-        desk,
-        demo_origin,
-        Colors::default(),
-        Timing::default(),
-        monotonic_now(),
-    );
-    let inputs = stream::select(frame_inputs(), key_inputs()?);
-    match watch_until_ending(&mut screen, terminal, inputs).await {
-        WatchEnding::Failed(error) => Err(io::Error::other(error)),
-        WatchEnding::BootCompleted | WatchEnding::ViewerLeft | WatchEnding::ShellTookOver => Ok(()),
+    let mut runtime = DemoRuntime {
+        boot: Rc::new(RefCell::new(DemoBoot {
+            script,
+            describe: scenario.describe,
+            next_stage: scenario.after_switch_root,
+            settled_at: None,
+            listed: None,
+            rejection_reported: false,
+        })),
+        epoch: monotonic_now(),
+    };
+    run_screen(&mut model, &mut runtime, terminal)
+        .await
+        .map_err(io::Error::other)?;
+    match model.handover {
+        Handover::Ended(WatchEnding::Failed(error)) => Err(io::Error::other(error)),
+        Handover::Ended(_)
+        | Handover::Watching
+        | Handover::HandingOver { .. }
+        | Handover::SettlingForShell { .. } => Ok(()),
     }
 }
 
@@ -502,14 +596,15 @@ mod tests {
     #[test]
     fn a_wrong_answer_is_checked_then_called_out() {
         let mut script = asking_demo();
-        let asked = script.prompt("", Duration::ZERO).expect("asking");
-        assert_eq!(asked.hint, Some(DEMO_PASSPHRASE_HINT));
-        assert!(!asked.rejected);
+        let asked = script.asked_request().expect("asking");
+        assert_eq!(
+            asked.hint,
+            RequestHint::Shown(DEMO_PASSPHRASE_HINT.to_owned())
+        );
+        assert!(!script.was_rejected(Duration::ZERO));
         script.answer("wrong", Duration::ZERO);
-        let checking = script.prompt("", KEY_DERIVATION / 2).expect("asking");
-        assert!(checking.sent && !checking.rejected);
-        let rejected = script.prompt("", KEY_DERIVATION).expect("asking again");
-        assert!(rejected.rejected && !rejected.sent);
+        assert!(!script.was_rejected(KEY_DERIVATION / 2));
+        assert!(script.was_rejected(KEY_DERIVATION));
     }
 
     #[test]
@@ -518,6 +613,6 @@ mod tests {
         script.answer(DEMO_PASSPHRASE, Duration::ZERO);
         script.advance(KEY_DERIVATION);
         assert!(script.is_done());
-        assert!(script.prompt("", KEY_DERIVATION).is_none());
+        assert!(script.asked_request().is_none());
     }
 }

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use super::{Activity, BootState, FailureCause, JobKind, JobResult, UnitFacts};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BootChange {
     TrackUnit {
         facts: UnitFacts,
