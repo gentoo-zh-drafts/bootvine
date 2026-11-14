@@ -19,11 +19,6 @@ let
       ];
     };
     strictDeps = true;
-    nativeBuildInputs = [ pkgs.pkg-config ];
-    buildInputs = [
-      pkgs.dbus
-      pkgs.systemd
-    ];
   };
 
   cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { pname = "bootvine-workspace"; });

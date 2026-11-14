@@ -7,12 +7,11 @@ while it does. None of this is needed to install or configure it.
 
 - **systemd ≥ 246 as PID 1.** bootvine reads the jobs and units from the
   service manager over D-Bus.
-- **[libdbus](https://www.freedesktop.org/wiki/Software/dbus/).** It talks to
-  PID 1 over systemd's private socket, which
-  [zbus](https://github.com/dbus2/zbus) cannot use; see
-  [systemd's private socket](#systemds-private-socket).
-- **libsystemd.** It reads the last journal lines of a failed unit; see
-  [failures](#failures).
+- **libsystemd at run time.** bootvine loads `libsystemd.so.0` when it reads
+  the last journal lines of a failed unit; see [failures](#failures). Without
+  it, failures show without those lines. Building needs neither libsystemd
+  nor libdbus: D-Bus goes through [zbus](https://github.com/dbus2/zbus), in
+  pure Rust; see [systemd's private socket](#systemds-private-socket).
 - **A virtual terminal.** It draws on `tty12` and switches the console to it.
 
 ## Overview
@@ -196,9 +195,11 @@ sequenceDiagram
   journal is opened without `SD_JOURNAL_LOCAL_ONLY`: libsystemd caches the
   initrd's machine ID, which would hide the real root's files after the
   switch, and the boot ID match already keeps other machines out.
-- **libsystemd** is linked rather than calling `journalctl`, since dracut,
-  mkinitcpio and the NixOS initrd builder copy the libraries a binary links
-  into the initramfs along with it, while `journalctl` may not be there.
+- **libsystemd** is loaded with `dlopen` rather than calling `journalctl`,
+  which may not be in the initramfs, and rather than linked, so that building
+  needs no libsystemd headers. The dracut module and the mkinitcpio hook copy
+  `libsystemd.so.0` into the initramfs; the Nix package adds systemd's `lib`
+  to the binary's `RUNPATH`, which brings it into the NixOS initrd's closure.
 
 ## Surviving the switch to the real root
 
@@ -394,7 +395,7 @@ answered by `ShellQueryAnswered`.
 | Crate | Holds | Depends on |
 | --- | --- | --- |
 | `bootvine-screen` | the model, the view and the screen application: `Model`, `Message`, `Command`, `Subscription`, `update`, `view`, `subscriptions`; settings parsing; the `ServiceManager` trait | ratatui's core and widgets, serde, petgraph, `futures-core` and other pure libraries |
-| `bootvine-systemd-link` | `SystemdLink`: the job feed over the private socket, journal lines, the password agent, status output and the systemd vocabulary | `bootvine-screen`, dbus, libsystemd, tokio, rustix |
+| `bootvine-systemd-link` | `SystemdLink`: the job feed over the private socket, journal lines, the password agent, status output and the systemd vocabulary | `bootvine-screen`, zbus, libsystemd loaded at run time, tokio, rustix |
 | `bootvine-openrc-link` | `OpenrcLink`: service state from `/run/openrc`, the dependency cache and the OpenRC vocabulary | `bootvine-screen`, inotify, rustix |
 | `bootvine` | the live runtime, the console (virtual terminal, `/dev/vcs12`, printk, font, resume console), the screen loop, install and `main` | the screen crate and whichever link crates its features enable |
 
@@ -404,7 +405,7 @@ everything else is private, and `#![deny(unreachable_pub)]` keeps it so.
 The compiler keeps this shape:
 
 - **No effects in the screen.** `bootvine-screen` does not depend on tokio,
-  rustix, dbus, libsystemd, crossterm or futures, so it cannot call them.
+  rustix, zbus, libsystemd, crossterm or futures, so it cannot call them.
   `futures-core` only defines the `Stream` trait. The parts of std that touch
   the system (`std::fs`, `std::env`, `std::process`, path metadata such as
   `Path::exists`, the wall clock) are caught by the
@@ -445,8 +446,8 @@ their order.
 `bootvine` builds with the `systemd` feature by default and `openrc` on
 request. At start it detects the running manager (`/run/systemd/system`, then
 `/run/openrc/softlevel`) among the compiled-in links and runs the same generic
-code with it. A build for Alpine or Gentoo leaves out `systemd` and so links
-neither libdbus nor libsystemd.
+code with it. A build for Alpine or Gentoo leaves out `systemd` and so has
+neither zbus nor the journal reader.
 
 #### What OpenRC gives
 
@@ -492,8 +493,14 @@ password requests fall back to a check every 100 ms.
 
 ## systemd's private socket
 
-- zbus rejects it, because PID 1 sends under its well-known name rather than a
-  unique one. libdbus works.
-- libdbus sends its authentication handshake together with the first message,
-  which systemd leaves unread, so a no-reply ping goes out right after
-  connecting.
+- PID 1 sends its replies and signals under its well-known name,
+  `org.freedesktop.systemd1`, where a peer on a bus would put its unique name.
+  zbus only accepts a unique name as the sender and drops such messages.
+- bootvine therefore hands zbus its own socket, which frames each message it
+  reads and turns the first byte of a sender that is not a unique name into
+  `:`. `org.freedesktop.systemd1` becomes `:rg.freedesktop.systemd1`, a valid
+  unique name of the same length, so no length or alignment in the message
+  changes. Nothing in bootvine reads the sender.
+- The socket passes the authentication handshake through unchanged until the
+  `OK` line, and does not offer to pass file descriptors, so nothing but
+  messages follows it.

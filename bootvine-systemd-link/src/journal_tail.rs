@@ -4,12 +4,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use systemd::{
-    id128::Id128,
-    journal::{Journal, OpenOptions},
-};
 use tokio::task::spawn_blocking;
 use tracing::warn;
+
+use crate::journal_library::{JournalStep, OpenJournal, current_boot_id};
 
 const UNIT_FIELDS: [&str; 4] = ["_SYSTEMD_UNIT", "UNIT", "_SYSTEMD_USER_UNIT", "USER_UNIT"];
 const MANAGER_SUMMARY_MESSAGE_IDS: [&str; 10] = [
@@ -48,9 +46,9 @@ pub(crate) async fn settled_unit_messages(
 }
 
 fn read_settled_messages(unit: &str, wanted: usize, deadline: Instant) -> io::Result<Vec<String>> {
-    let mut journal = OpenOptions::default().open()?;
+    let mut journal = OpenJournal::open_all()?;
     match_unit_in_this_boot(&mut journal, unit)?;
-    journal.fd()?;
+    journal.watch_for_new_entries()?;
     loop {
         let messages = scan_newest_messages(&mut journal, wanted)?;
         let remaining = deadline
@@ -58,21 +56,21 @@ fn read_settled_messages(unit: &str, wanted: usize, deadline: Instant) -> io::Re
             .filter(|left| !left.is_zero());
         match remaining {
             Some(left) if !messages.manager_reported => {
-                journal.wait(Some(left))?;
+                journal.wait(left)?;
             }
             _ => return Ok(messages.oldest_first),
         }
     }
 }
 
-fn scan_newest_messages(journal: &mut Journal, wanted: usize) -> io::Result<UnitMessages> {
+fn scan_newest_messages(journal: &mut OpenJournal, wanted: usize) -> io::Result<UnitMessages> {
     journal.seek_tail()?;
     let mut newest_first = Vec::new();
     let mut manager_reported = false;
     let mut scanned = 0;
     while newest_first.len() < wanted
         && scanned < ENTRIES_SCANNED
-        && journal.previous().is_ok_and(|moved| moved > 0)
+        && matches!(journal.step_back(), Ok(JournalStep::Moved))
     {
         scanned += 1;
         if is_manager_summary(journal).unwrap_or(true) {
@@ -90,15 +88,13 @@ fn scan_newest_messages(journal: &mut Journal, wanted: usize) -> io::Result<Unit
     })
 }
 
-fn match_unit_in_this_boot(journal: &mut Journal, unit: &str) -> io::Result<()> {
+fn match_unit_in_this_boot(journal: &mut OpenJournal, unit: &str) -> io::Result<()> {
     UNIT_FIELDS.iter().try_for_each(|field| {
-        journal.match_add(field, unit)?.match_or()?;
-        Ok::<_, io::Error>(())
+        journal.add_match(field, unit)?;
+        journal.add_disjunction()
     })?;
-    journal
-        .match_and()?
-        .match_add("_BOOT_ID", Id128::from_boot()?.to_string())?;
-    Ok(())
+    journal.add_conjunction()?;
+    journal.add_match("_BOOT_ID", &current_boot_id()?)
 }
 
 #[expect(
@@ -106,20 +102,18 @@ fn match_unit_in_this_boot(journal: &mut Journal, unit: &str) -> io::Result<()> 
     reason = "journal fields may hold arbitrary bytes and are only shown on screen, so a \
               replacement character beats dropping the message"
 )]
-fn field_text(journal: &mut Journal, field: &str) -> io::Result<Option<String>> {
-    Ok(journal.get_data(field)?.and_then(|entry_field| {
-        entry_field
-            .value()
-            .map(|value| String::from_utf8_lossy(value).into_owned())
-    }))
+fn field_text(journal: &mut OpenJournal, field: &str) -> io::Result<Option<String>> {
+    Ok(journal
+        .field_bytes(field)?
+        .map(|value| String::from_utf8_lossy(&value).into_owned()))
 }
 
-fn is_manager_summary(journal: &mut Journal) -> io::Result<bool> {
+fn is_manager_summary(journal: &mut OpenJournal) -> io::Result<bool> {
     Ok(field_text(journal, "MESSAGE_ID")?
         .is_some_and(|message_id| MANAGER_SUMMARY_MESSAGE_IDS.contains(&message_id.as_str())))
 }
 
-fn entry_message(journal: &mut Journal) -> io::Result<Option<String>> {
+fn entry_message(journal: &mut OpenJournal) -> io::Result<Option<String>> {
     Ok(field_text(journal, "MESSAGE")?
         .map(|message| printable_line(&message))
         .filter(|line| !line.is_empty()))

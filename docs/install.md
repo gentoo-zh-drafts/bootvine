@@ -63,12 +63,21 @@ Then run `sudo nixos-rebuild switch`. The repository's `default.nix` also
 exposes `bootvine`, `overlay` and `nixosModule`; the flake exports the same
 overlay as `overlays.default`.
 
-## Ubuntu
+## From source
 
-1. Install the build dependencies and Rust:
+This works the same on every distribution with systemd: building needs only
+Rust and a C toolchain, and no library headers.
+
+1. Install a C toolchain with your package manager, then Rust:
+
+   | Distribution | C toolchain |
+   | --- | --- |
+   | Debian, Ubuntu | `sudo apt install build-essential curl` |
+   | Fedora | `sudo dnf install gcc curl` |
+   | Arch | `sudo pacman -S base-devel` |
+   | openSUSE | `sudo zypper install gcc curl` |
 
    ```sh
-   sudo apt install build-essential pkg-config libdbus-1-dev libsystemd-dev git curl
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
 
@@ -90,10 +99,13 @@ overlay as `overlays.default`.
    for stage 2 and shutdown. The copy in `~/.cargo/bin` is no longer needed;
    `cargo uninstall bootvine` removes it.
 
-4. Optionally, show the boot from the initrd. This needs a
-   [dracut](https://github.com/dracut-ng/dracut-ng) initramfs with systemd in
-   it; initramfs-tools has no systemd, so on releases that use
-   it bootvine starts in stage 2 only.
+4. Optionally, show the boot from the initrd. This needs an initramfs with
+   systemd in it, built by dracut or mkinitcpio; initramfs-tools has no
+   systemd, so on Debian and Ubuntu releases that use it bootvine starts in
+   stage 2 only. Either hook also copies `libsystemd.so.0`, which bootvine
+   loads to show the journal lines of failed units.
+
+   With [dracut](https://github.com/dracut-ng/dracut-ng):
 
    ```sh
    bootvine install --initrd dracut
@@ -103,35 +115,21 @@ overlay as `overlays.default`.
    This adds the dracut module in `/usr/lib/dracut/modules.d/90bootvine` and
    enables it in `/etc/dracut.conf.d/bootvine.conf`.
 
-5. Reboot.
-
-## Other distributions
-
-Install as in the Ubuntu steps, with your distribution's packages for a C
-toolchain, `pkg-config` and the libdbus and libsystemd headers.
-
-For the initrd, use the dracut module as above, or on
-[mkinitcpio](https://wiki.archlinux.org/title/Mkinitcpio):
-
-1. Install the hook in `/usr/lib/initcpio/install/sd-bootvine`:
+   With [mkinitcpio](https://wiki.archlinux.org/title/Mkinitcpio), install the
+   hook in `/usr/lib/initcpio/install/sd-bootvine`, add `sd-bootvine` after
+   `systemd` in `HOOKS` in `/etc/mkinitcpio.conf`, and rebuild:
 
    ```sh
    bootvine install --initrd mkinitcpio
-   ```
-
-2. Add `sd-bootvine` after `systemd` in `HOOKS` in `/etc/mkinitcpio.conf`.
-
-3. Rebuild the initramfs:
-
-   ```sh
    sudo mkinitcpio -P
    ```
+
+5. Reboot.
 
 ## OpenRC
 
 On Alpine, Gentoo, Artix or Devuan with [OpenRC](https://github.com/OpenRC/openrc),
-build without systemd, which also drops the libdbus and libsystemd
-dependencies:
+build without systemd:
 
 ```sh
 cargo install bootvine --no-default-features --features openrc

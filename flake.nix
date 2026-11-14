@@ -146,15 +146,7 @@
               rustToolchain
               pkgs.ast-grep
             ];
-            extraReleaseInputs = [
-              pkgs.pkg-config
-              pkgs.stdenv.cc
-            ];
-            releaseWrapperArgs = [
-              "--set"
-              "PKG_CONFIG_PATH"
-              (lib.makeSearchPathOutput "dev" "lib/pkgconfig" bootvine.buildInputs)
-            ];
+            extraReleaseInputs = [ pkgs.stdenv.cc ];
           };
         in
         sampleMachineApps

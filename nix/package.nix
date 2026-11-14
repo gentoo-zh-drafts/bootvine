@@ -1,8 +1,6 @@
 {
   lib,
   rustPlatform,
-  pkg-config,
-  dbus,
   systemd,
 }:
 let
@@ -38,11 +36,6 @@ rustPlatform.buildRustPackage {
   ];
 
   strictDeps = true;
-  nativeBuildInputs = [ pkg-config ];
-  buildInputs = [
-    dbus
-    systemd
-  ];
 
   postInstall = ''
     for unit in bootvine.service bootvine-shutdown.service; do
@@ -59,6 +52,12 @@ rustPlatform.buildRustPackage {
     install -Dm644 bootvine/system-files/mkinitcpio/install/sd-bootvine \
       $out/lib/initcpio/install/sd-bootvine
   '';
+
+  postFixup = ''
+    patchelf --add-rpath ${lib.getLib systemd}/lib $out/bin/bootvine
+  '';
+
+  passthru.journalLibrary = "${lib.getLib systemd}/lib/libsystemd.so.0";
 
   meta = {
     description = "Live dependency tree of systemd jobs on the boot console";

@@ -2,10 +2,12 @@
 
 mod boot_feed;
 mod descriptor_streams;
+mod journal_library;
 mod journal_tail;
 mod link_error;
 mod monotonic_clock;
 mod password_agent;
+mod private_socket;
 mod switch_root;
 mod systemd_bus;
 mod systemd_link;

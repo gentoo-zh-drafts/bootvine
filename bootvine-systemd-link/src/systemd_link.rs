@@ -22,19 +22,22 @@ use crate::{
     link_error::{LinkError, LinkFailure},
     password_agent::{console_prompt, password_request_stream, send_answer, until_abandoned},
     switch_root::INITRD_RELEASE,
-    systemd_bus::{BusConnection, Session, UnitLookup, restore_status_after_watch},
+    systemd_bus::{
+        BusConnection, StatusOutput, UnitLookup, change_status_output_now,
+        restore_status_after_watch,
+    },
     systemd_vocabulary::{HANDOFF_UNIT, SHELL_UNITS, systemd_vocabulary},
 };
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemdLink;
 
-fn system_connection() -> Result<BusConnection, LinkFailure> {
-    Ok(BusConnection::register(Session::open(Scope::System)?)?)
+async fn system_connection() -> Result<BusConnection, LinkFailure> {
+    BusConnection::open(Scope::System).await
 }
 
 async fn queried_shell_start() -> Result<ShellStart, LinkFailure> {
-    let jobs = system_connection()?.list_jobs().await?;
+    let jobs = system_connection().await?.list_jobs().await?;
     let starting = jobs
         .iter()
         .any(|job| job.kind == JobKind::BringsUp && SHELL_UNITS.contains(&job.unit.as_str()));
@@ -46,7 +49,8 @@ async fn queried_shell_start() -> Result<ShellStart, LinkFailure> {
 }
 
 async fn queried_display_manager() -> Result<DisplayManager, LinkFailure> {
-    let UnitLookup::Loaded(fetched) = system_connection()?.fetch_unit(HANDOFF_UNIT).await? else {
+    let UnitLookup::Loaded(fetched) = system_connection().await?.fetch_unit(HANDOFF_UNIT).await?
+    else {
         return Ok(DisplayManager::NotRunning);
     };
     Ok(match fetched.activity.state {
@@ -76,7 +80,7 @@ impl ServiceManager for SystemdLink {
     }
 
     async fn boot_progress(&self) -> BootProgress {
-        let Ok(mut connection) = system_connection() else {
+        let Ok(mut connection) = system_connection().await else {
             return BootProgress::Finished;
         };
         connection
@@ -131,11 +135,11 @@ impl ServiceManager for SystemdLink {
     }
 
     fn restore_status_output(&self) -> Result<(), LinkError> {
-        Ok(Session::open(Scope::System)?.restore_configured_status()?)
+        Ok(change_status_output_now(StatusOutput::Configured)?)
     }
 
     fn silence_status_output(&self) -> Result<(), LinkError> {
-        Ok(Session::open(Scope::System)?.silence_status_now()?)
+        Ok(change_status_output_now(StatusOutput::Silent)?)
     }
 
     async fn quiet_status_output_during<Outer: From<LinkError>>(

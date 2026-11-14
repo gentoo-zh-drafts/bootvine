@@ -62,7 +62,10 @@ in
 
     boot.initrd.systemd = {
       packages = [ cfg.package ];
-      storePaths = [ (lib.getExe cfg.package) ];
+      storePaths = [
+        (lib.getExe cfg.package)
+        cfg.package.journalLibrary
+      ];
       services.bootvine.wantedBy = [ "sysinit.target" ];
       contents."/etc/bootvine.toml" = lib.mkIf hasSettings { source = configFile; };
     };

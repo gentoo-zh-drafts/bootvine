@@ -23,8 +23,8 @@ screen.
 
 ## Requirements
 
-- systemd ≥ 246 as PID 1, with [libdbus](https://www.freedesktop.org/wiki/Software/dbus/) and libsystemd,
-  or [OpenRC](https://github.com/OpenRC/openrc) (built with `--features openrc`)
+- systemd ≥ 246 as PID 1, or [OpenRC](https://github.com/OpenRC/openrc)
+  (built with `--features openrc`)
 - a virtual terminal
 - a systemd initrd, to show the boot from the initrd as well as stage 2
 
@@ -51,7 +51,7 @@ lists the other sample machines and the scripted demos that play in a terminal.
   to the screen: the tree, the timeline, failures, shutdown and passphrase
   prompts.
 - [Install](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/install.md)
-  on NixOS, Ubuntu, OpenRC and other distributions.
+  on NixOS, from source on any systemd distribution, and on OpenRC.
 - [Configuration](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/configuration.md)
   of colours, timing and the console.
 - [Architecture](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/architecture.md):

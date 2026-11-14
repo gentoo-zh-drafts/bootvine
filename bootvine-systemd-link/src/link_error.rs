@@ -1,17 +1,16 @@
 use std::{convert::Infallible, io};
 
 use bootvine_screen::screen_components::handover::WatchFailure;
-use dbus::{Error as BusError, arg::TypeMismatchError};
 use rustix::io::Errno;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LinkFailure {
     #[error("systemd bus: {0}")]
-    Bus(#[from] BusError),
-    #[error("unexpected reply from systemd: {0}")]
-    Reply(#[from] TypeMismatchError),
-    #[error("could not build a method call")]
-    MalformedCall,
+    Bus(#[from] zbus::Error),
+    #[error("systemd refused the call: {0}")]
+    Refused(BusRefusal),
+    #[error("starting a runtime to reach systemd: {0}")]
+    CallRuntime(io::Error),
     #[error("the service manager closed the connection")]
     Disconnected,
     #[error("the service manager did not answer in time")]
@@ -22,6 +21,13 @@ pub(crate) enum LinkFailure {
     RootSwitch(#[from] Errno),
     #[error("the service manager did not come back")]
     ManagerUnreachable,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{name}: {description}")]
+pub(crate) struct BusRefusal {
+    pub(crate) name: String,
+    pub(crate) description: String,
 }
 
 #[derive(Debug, thiserror::Error)]

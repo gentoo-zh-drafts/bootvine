@@ -13,7 +13,6 @@ use bootvine_screen::{
     },
     screen_components::handover::WatchFailure,
 };
-use dbus::Path;
 use futures::{
     FutureExt, Stream, StreamExt, TryStreamExt,
     future::{BoxFuture, Either, select},
@@ -22,6 +21,7 @@ use futures::{
 };
 use tokio::time::sleep;
 use tracing::info;
+use zbus::OwnedObjectPath;
 
 use crate::{
     descriptor_streams::{BACKGROUND_CHECK_INTERVAL, CarriedItem, unfold_carrying},
@@ -30,7 +30,7 @@ use crate::{
     monotonic_clock::monotonic_now,
     switch_root::Sysroot,
     systemd_bus::{
-        BusConnection, FailureReason, FetchedUnit, JobListing, Session, Signal, SignalBatch,
+        BusConnection, FailureReason, FetchedUnit, JobListing, Signal, SignalBatch, StatusOutput,
         UnitLookup,
     },
     systemd_names::systemd_unit_facts,
@@ -57,7 +57,7 @@ enum ConnectAttempt {
 }
 
 enum Link {
-    Connected(BusConnection),
+    Connected(Box<BusConnection>),
     Connecting {
         deadline: Instant,
         attempt: ConnectAttempt,
@@ -127,7 +127,7 @@ struct BootTracker {
     scope: Scope,
     target: RootRequest,
     phase: Phase,
-    unit_paths: HashMap<Path<'static>, String>,
+    unit_paths: HashMap<OwnedObjectPath, String>,
     explained_failures: HashSet<String>,
     units_in_failed_state: HashSet<String>,
     root_switch: RootSwitch,
@@ -187,12 +187,12 @@ impl BusFeed {
         &mut self,
         attempt: ConnectAttempt,
     ) -> Result<Vec<BootChange>, LinkFailure> {
-        let mut connection = BusConnection::register(Session::open(self.tracker.scope)?)?;
+        let mut connection = BusConnection::open(self.tracker.scope).await?;
         let changes = self
             .tracker
             .start_watching(&mut connection, attempt)
             .await?;
-        self.link = Link::Connected(connection);
+        self.link = Link::Connected(Box::new(connection));
         Ok(changes)
     }
 
@@ -237,7 +237,7 @@ impl BusFeed {
 }
 
 impl BootTracker {
-    async fn wait_for_bus_or_journal(&mut self, connection: &BusConnection) -> Vec<BootChange> {
+    async fn wait_for_bus_or_journal(&mut self, connection: &mut BusConnection) -> Vec<BootChange> {
         if self.pending_journal_reads.is_empty() {
             connection.wait_for_signals().await;
             return Vec::new();
@@ -357,7 +357,9 @@ impl BootTracker {
         attempt: ConnectAttempt,
     ) -> Result<Vec<BootChange>, LinkFailure> {
         if self.scope == Scope::System {
-            connection.silence_status_output().await?;
+            connection
+                .change_status_output(StatusOutput::Silent)
+                .await?;
         }
         connection.subscribe().await?;
         let shutting_down = self.phase == Phase::Shutdown;
@@ -396,11 +398,7 @@ impl BootTracker {
             unit = %root,
             phase = self.phase.label(),
             pid = process::id(),
-            transport = if connection.peer_to_peer() {
-                "the private socket"
-            } else {
-                "the bus"
-            },
+            transport = connection.transport().label(),
             "watching the boot",
         );
         let queued_at = monotonic_now();
@@ -582,7 +580,7 @@ impl BootTracker {
         &mut self,
         connection: &mut BusConnection,
         id: u32,
-        job: &Path<'static>,
+        job: &OwnedObjectPath,
         unit: String,
         at: Duration,
     ) -> Result<Vec<BootChange>, LinkFailure> {
