@@ -8,7 +8,7 @@ license = "GPL-3.0-or-later"
 name = "bootvine"
 readme = "../README.md"
 repository = "https://codeberg.org/wvhulle/bootvine"
-rust-version = "1.91"
+rust-version = "1.95"
 version = "0.1.4"
 
 [lints]

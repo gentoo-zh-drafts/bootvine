@@ -9,7 +9,7 @@ while it does. None of this is needed to install or configure it.
   service manager over D-Bus.
 - **No system libraries.** D-Bus goes through
   [zbus](https://github.com/dbus2/zbus) and the journal through
-  [systemd-journal-sdk](https://github.com/netdata/systemd-journal-sdk), both in pure Rust; see
+  [sdjournal](https://github.com/lvillis/sdjournal), both in pure Rust; see
   [systemd's private socket](#systemds-private-socket) and
   [failures](#failures).
 - **A virtual terminal.** It draws on `tty12` and switches the console to it.
@@ -187,9 +187,8 @@ sequenceDiagram
   its reason reach the screen first. PID 1 logs its own "Failed with result…"
   or "Failed to start…" line once the unit's process has exited, so bootvine
   takes that line's presence as the sign that the unit's own lines are in, and
-  until then waits for the journal to grow: journald truncates a journal file
-  to its own size after each write, which inotify reports on the journal
-  directories.
+  until then waits for the journal to grow, woken by inotify on the journal
+  files.
 - **The journal lines** match the unit the same way `journalctl -u` does
   (`_SYSTEMD_UNIT=` or `UNIT=`, in the current boot), without PID 1's own
   "Starting…", "Failed with result…" and "Failed to start…" lines, which the
@@ -198,12 +197,12 @@ sequenceDiagram
   whichever machine ID they belong to, so the real root's files show after
   the switch, and the boot ID match keeps other machines out.
 - **The journal files** are read by
-  [systemd-journal-sdk](https://github.com/netdata/systemd-journal-sdk) rather than
-  through libsystemd or `journalctl`: building needs no libsystemd headers,
-  and nothing beyond the binary has to be in the initramfs. Each read lists
-  and opens the files anew, so it sees entries written since the last one and
-  files journald rotated or created meanwhile, and the inotify watches are
-  set up before that read, so nothing written in between goes unnoticed.
+  [sdjournal](https://github.com/lvillis/sdjournal) rather than through
+  libsystemd or `journalctl`: building needs no libsystemd headers, and
+  nothing beyond the binary has to be in the initramfs. A journal handle does
+  not see entries written after it opened, so each read opens the journal
+  anew. A live subscription to the unit, registered before the first read,
+  wakes the wait, so nothing written in between goes unnoticed.
 
 ## Surviving the switch to the real root
 
@@ -407,7 +406,7 @@ answered by `ShellQueryAnswered`.
 | Crate | Holds | Depends on |
 | --- | --- | --- |
 | `bootvine-screen` | the model, the view and the screen application: `Model`, `Message`, `Command`, `Subscription`, `update`, `view`, `subscriptions`; settings parsing; the `ServiceManager` trait | ratatui's core and widgets, serde, petgraph, `futures-core` and other pure libraries |
-| `bootvine-systemd-link` | `SystemdLink`: the job feed over the private socket, journal lines, the password agent, status output and the systemd vocabulary | `bootvine-screen`, zbus, systemd-journal-sdk, tokio, rustix |
+| `bootvine-systemd-link` | `SystemdLink`: the job feed over the private socket, journal lines, the password agent, status output and the systemd vocabulary | `bootvine-screen`, zbus, sdjournal, tokio, rustix |
 | `bootvine-openrc-link` | `OpenrcLink`: service state from `/run/openrc`, the dependency cache and the OpenRC vocabulary | `bootvine-screen`, inotify, rustix |
 | `bootvine` | the live runtime, the console (virtual terminal, `/dev/vcs12`, printk, font, resume console), the screen loop, install and `main` | the screen crate and whichever link crates its features enable |
 
@@ -417,7 +416,7 @@ everything else is private, and `#![deny(unreachable_pub)]` keeps it so.
 The compiler keeps this shape:
 
 - **No effects in the screen.** `bootvine-screen` does not depend on tokio,
-  rustix, zbus, systemd-journal-sdk, crossterm or futures, so it cannot call them.
+  rustix, zbus, sdjournal, crossterm or futures, so it cannot call them.
   `futures-core` only defines the `Stream` trait. The parts of std that touch
   the system (`std::fs`, `std::env`, `std::process`, path metadata such as
   `Path::exists`, the wall clock) are caught by the
