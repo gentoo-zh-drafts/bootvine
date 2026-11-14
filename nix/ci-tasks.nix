@@ -78,6 +78,7 @@ let
           pkgs.convco
           pkgs.gitMinimal
         ];
+        check-release-pr-is-current = [ pkgs.gitMinimal ];
       };
 
   preCommitHooksTool =

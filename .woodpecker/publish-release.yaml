@@ -35,11 +35,3 @@ steps:
     environment: *release_env
     commands:
       - nix run --quiet .#publish-unreleased-crate-version
-
-  - name: open-or-update-release-pr
-    image: nixos/nix:latest
-    environment: *release_env
-    commands:
-      - nix run --quiet .#open-or-update-release-pr
-    when:
-      - status: [success, failure]
