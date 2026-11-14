@@ -109,18 +109,19 @@ impl SenderRewritingReader {
 impl ReadHalf for SenderRewritingReader {
     async fn recvmsg(&mut self, buffer: &mut [u8]) -> io::Result<(usize, Vec<OwnedFd>)> {
         while self.rewritten_bytes.is_empty() {
-            let mut chunk = vec![0; READ_CHUNK_LENGTH];
-            let read = self.stream.read(&mut chunk).await?;
-            if read == 0 {
+            let mut received_chunk = vec![0; READ_CHUNK_LENGTH];
+            let received_length = self.stream.read(&mut received_chunk).await?;
+            if received_length == 0 {
                 return Ok((0, Vec::new()));
             }
-            self.unread_bytes.extend_from_slice(&chunk[..read]);
+            self.unread_bytes
+                .extend_from_slice(&received_chunk[..received_length]);
             self.rewrite_what_is_complete();
         }
-        let handed = buffer.len().min(self.rewritten_bytes.len());
-        buffer[..handed].copy_from_slice(&self.rewritten_bytes[..handed]);
-        self.rewritten_bytes.drain(..handed);
-        Ok((handed, Vec::new()))
+        let handed_length = buffer.len().min(self.rewritten_bytes.len());
+        buffer[..handed_length].copy_from_slice(&self.rewritten_bytes[..handed_length]);
+        self.rewritten_bytes.drain(..handed_length);
+        Ok((handed_length, Vec::new()))
     }
 }
 
@@ -143,15 +144,15 @@ impl WriteHalf for PlainSocketWriter {
 }
 
 fn read_u32(bytes: &[u8], offset: usize, order: &ByteOrder) -> Option<usize> {
-    let word: [u8; 4] = bytes
+    let length_bytes: [u8; 4] = bytes
         .get(offset..offset + 4)?
         .try_into()
         .expect("a range of four bytes is four bytes long");
-    let value = match order {
-        ByteOrder::Little => u32::from_le_bytes(word),
-        ByteOrder::Big => u32::from_be_bytes(word),
+    let decoded_length = match order {
+        ByteOrder::Little => u32::from_le_bytes(length_bytes),
+        ByteOrder::Big => u32::from_be_bytes(length_bytes),
     };
-    Some(usize::try_from(value).expect("a u32 fits in a usize on Linux"))
+    Some(usize::try_from(decoded_length).expect("a u32 fits in a usize on Linux"))
 }
 
 fn byte_order_of(message: &[u8]) -> Option<ByteOrder> {
@@ -316,30 +317,34 @@ mod tests {
                 "slow.service",
             ))?;
             manager.send(&job_new).await?;
-            let reply = Message::method_return(&call.header())
+            let default_target_return = Message::method_return(&call.header())
                 .sender(":rg.freedesktop.systemd1")
                 .build(&("graphical.target",))?;
-            manager.send(&reply).await?;
+            manager.send(&default_target_return).await?;
         }
         Ok(())
     }
 
+    struct ConnectedPair {
+        client: Connection,
+        manager: Connection,
+    }
+
     async fn connected_pair(
         client_socket: impl FnOnce(UnixStream) -> ConnectionBuilder<'static>,
-    ) -> zbus::Result<(Connection, Connection)> {
+    ) -> zbus::Result<ConnectedPair> {
         let (client_end, manager_end) = UnixStream::pair()?;
-        try_join(
-            client_socket(client_end).p2p().build(),
-            ConnectionBuilder::socket(WellKnownSenderSocket(manager_end))
-                .server(Guid::generate())
-                .p2p()
-                .build(),
-        )
-        .await
+        let client = client_socket(client_end).p2p().build();
+        let manager = ConnectionBuilder::socket(WellKnownSenderSocket(manager_end))
+            .server(Guid::generate())
+            .p2p()
+            .build();
+        let (client, manager) = try_join(client, manager).await?;
+        Ok(ConnectedPair { client, manager })
     }
 
     async fn default_target_call(client: &Connection) -> zbus::Result<String> {
-        let reply = client
+        let default_target_reply = client
             .call_method(
                 Some("org.freedesktop.systemd1"),
                 "/org/freedesktop/systemd1",
@@ -348,7 +353,7 @@ mod tests {
                 &(),
             )
             .await?;
-        reply.body().deserialize()
+        default_target_reply.body().deserialize()
     }
 
     fn run_on_tokio<Output>(future: impl Future<Output = Output>) -> Output {
@@ -362,7 +367,7 @@ mod tests {
     #[test]
     fn replies_under_the_well_known_name_reach_the_caller() {
         run_on_tokio(async {
-            let (client, manager) =
+            let ConnectedPair { client, manager } =
                 connected_pair(|stream| ConnectionBuilder::socket(SystemdPrivateSocket(stream)))
                     .await
                     .expect("the client and the fake manager connect");
@@ -388,7 +393,7 @@ mod tests {
     #[test]
     fn without_the_rewrite_zbus_drops_the_reply() {
         run_on_tokio(async {
-            let (client, manager) = connected_pair(|stream| {
+            let ConnectedPair { client, manager } = connected_pair(|stream| {
                 ConnectionBuilder::unix_stream(stream.into_std().expect("a tokio socket converts"))
             })
             .await

@@ -398,7 +398,7 @@ impl BootTracker {
             unit = %root,
             phase = self.phase.label(),
             pid = process::id(),
-            transport = connection.transport().label(),
+            transport = %connection.transport(),
             "watching the boot",
         );
         let queued_at = monotonic_now();

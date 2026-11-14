@@ -1,4 +1,5 @@
 use std::{
+    fmt::{self, Display, Formatter},
     future::{Future, pending, ready},
     io, mem,
     num::NonZeroUsize,
@@ -18,14 +19,14 @@ use futures::{
     future::{Either, select},
     stream,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{
     net::UnixStream,
     runtime::Builder as RuntimeBuilder,
     signal::unix::{Signal as OsSignal, SignalKind, signal},
     time::timeout,
 };
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use zbus::{
     Connection, DBusError, DeserializeDict, DynamicType, MatchRule, Message, MessageStream,
     OwnedObjectPath, OwnedVariant, Type, connection::Builder as ConnectionBuilder,
@@ -129,21 +130,22 @@ pub(crate) struct JobListing {
     pub(crate) kind: JobKind,
 }
 
-type ListedJob = (
-    u32,
-    String,
-    String,
-    String,
-    OwnedObjectPath,
-    OwnedObjectPath,
-);
+#[derive(Deserialize, Type)]
+struct ListedJob {
+    id: u32,
+    unit: String,
+    kind: String,
+    _job_state: String,
+    _job_path: OwnedObjectPath,
+    _unit_path: OwnedObjectPath,
+}
 
 impl From<ListedJob> for JobListing {
-    fn from((id, unit, kind, ..): ListedJob) -> Self {
+    fn from(listed_job: ListedJob) -> Self {
         Self {
-            id,
-            unit,
-            kind: job_kind_from(&kind),
+            id: listed_job.id,
+            unit: listed_job.unit,
+            kind: job_kind_from(&listed_job.kind),
         }
     }
 }
@@ -169,12 +171,12 @@ pub(crate) enum BusTransport {
     MessageBus,
 }
 
-impl BusTransport {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
+impl Display for BusTransport {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
             Self::PrivateSocket => "the private socket",
             Self::MessageBus => "the bus",
-        }
+        })
     }
 }
 
@@ -183,9 +185,23 @@ enum SignalStreamState {
     Ended,
 }
 
+enum SignalArrival {
+    Message(zbus::Result<Message>),
+    StreamEnded,
+}
+
+impl From<Option<zbus::Result<Message>>> for SignalArrival {
+    fn from(next_message: Option<zbus::Result<Message>>) -> Self {
+        match next_message {
+            Some(message) => Self::Message(message),
+            None => Self::StreamEnded,
+        }
+    }
+}
+
 enum CallProgress<Answer> {
     Answered(Answer),
-    SignalArrived(Option<zbus::Result<Message>>),
+    SignalArrived(SignalArrival),
 }
 
 async fn boot_finish_or_lost_connection() -> Result<(), LinkFailure> {
@@ -284,10 +300,16 @@ impl BusConnection {
         let (connection, transport) = match scope {
             Scope::System => match private_socket_connection().await {
                 Ok(connection) => (connection, BusTransport::PrivateSocket),
-                Err(_) => (
-                    ConnectionBuilder::system().build().await?,
-                    BusTransport::MessageBus,
-                ),
+                Err(unavailable) => {
+                    info!(
+                        error = %unavailable,
+                        "the private socket of systemd is unavailable, using the bus"
+                    );
+                    (
+                        ConnectionBuilder::system().build().await?,
+                        BusTransport::MessageBus,
+                    )
+                }
             },
             Scope::User => (
                 ConnectionBuilder::session().build().await?,
@@ -315,17 +337,17 @@ impl BusConnection {
         self.transport
     }
 
-    fn keep_arrived_signal(&mut self, arrived: Option<zbus::Result<Message>>) {
-        match arrived {
-            Some(Ok(message)) => {
+    fn keep_arrived_signal(&mut self, signal_arrival: SignalArrival) {
+        match signal_arrival {
+            SignalArrival::Message(Ok(message)) => {
                 if let BusMessage::Signal(signal) = parse_signal(&message) {
                     self.early_signals.push(signal);
                 }
             }
-            Some(Err(error)) => {
+            SignalArrival::Message(Err(error)) => {
                 warn!(error = %error, "skipped an unreadable message from systemd");
             }
-            None => self.signal_stream_state = SignalStreamState::Ended,
+            SignalArrival::StreamEnded => self.signal_stream_state = SignalStreamState::Ended,
         }
     }
 
@@ -338,13 +360,17 @@ impl BusConnection {
             if let SignalStreamState::Ended = self.signal_stream_state {
                 return answer.await;
             }
-            let progress = match select(answer.as_mut(), self.signal_stream.next()).await {
-                Either::Left((answered, _)) => CallProgress::Answered(answered),
-                Either::Right((arrived, _)) => CallProgress::SignalArrived(arrived),
+            let call_progress = match select(answer.as_mut(), self.signal_stream.next()).await {
+                Either::Left((call_answer, _)) => CallProgress::Answered(call_answer),
+                Either::Right((next_message, _)) => {
+                    CallProgress::SignalArrived(SignalArrival::from(next_message))
+                }
             };
-            match progress {
-                CallProgress::Answered(answered) => return answered,
-                CallProgress::SignalArrived(arrived) => self.keep_arrived_signal(arrived),
+            match call_progress {
+                CallProgress::Answered(call_answer) => return call_answer,
+                CallProgress::SignalArrived(signal_arrival) => {
+                    self.keep_arrived_signal(signal_arrival);
+                }
             }
         }
     }
@@ -357,12 +383,14 @@ impl BusConnection {
         arguments: &Arguments,
     ) -> Result<Message, LinkFailure> {
         let connection = self.connection.clone();
-        let reply =
+        let pending_reply =
             connection.call_method(Some(DESTINATION), path, Some(interface), member, arguments);
-        let Ok(answered) = timeout(CALL_TIMEOUT, self.keeping_signals_until(reply)).await else {
+        let Ok(call_answer) =
+            timeout(CALL_TIMEOUT, self.keeping_signals_until(pending_reply)).await
+        else {
             return Err(LinkFailure::CallTimedOut);
         };
-        answered.map_err(|call_error| match call_error {
+        call_answer.map_err(|call_error| match call_error {
             zbus::Error::MethodError(name, description, _) => LinkFailure::Refused(BusRefusal {
                 name: name.to_string(),
                 description: description.unwrap_or_default(),
@@ -390,10 +418,10 @@ impl BusConnection {
         interface: &str,
         property: &str,
     ) -> Result<OwnedVariant, LinkFailure> {
-        let reply = self
+        let property_reply = self
             .call(path, PROPERTIES_INTERFACE, "Get", &(interface, property))
             .await?;
-        Ok(reply.body().deserialize()?)
+        Ok(property_reply.body().deserialize()?)
     }
 
     pub(crate) async fn subscribe(&mut self) -> Result<(), LinkFailure> {
@@ -411,8 +439,8 @@ impl BusConnection {
     }
 
     pub(crate) async fn default_target(&mut self) -> Result<String, LinkFailure> {
-        let reply = self.manager_call("GetDefaultTarget", &()).await?;
-        Ok(reply.body().deserialize()?)
+        let default_target_reply = self.manager_call("GetDefaultTarget", &()).await?;
+        Ok(default_target_reply.body().deserialize()?)
     }
 
     pub(crate) async fn boot_progress(&mut self) -> Result<BootProgress, LinkFailure> {
@@ -426,9 +454,9 @@ impl BusConnection {
     }
 
     pub(crate) async fn list_jobs(&mut self) -> Result<Vec<JobListing>, LinkFailure> {
-        let reply = self.manager_call("ListJobs", &()).await?;
-        let listed: Vec<ListedJob> = reply.body().deserialize()?;
-        Ok(listed.into_iter().map(JobListing::from).collect())
+        let job_list_reply = self.manager_call("ListJobs", &()).await?;
+        let listed_jobs: Vec<ListedJob> = job_list_reply.body().deserialize()?;
+        Ok(listed_jobs.into_iter().map(JobListing::from).collect())
     }
 
     pub(crate) async fn job_kind(&mut self, job: &OwnedObjectPath) -> Result<JobKind, LinkFailure> {
@@ -436,7 +464,7 @@ impl BusConnection {
             Err(LinkFailure::Refused(refusal)) if refusal.name == UNKNOWN_OBJECT => {
                 return Ok(JobKind::Unknown);
             }
-            answered => answered?,
+            call_answer => call_answer?,
         };
         Ok(job_kind_from(&String::try_from(kind)?))
     }
@@ -446,7 +474,7 @@ impl BusConnection {
             Err(LinkFailure::Refused(refusal)) if refusal.name == NO_SUCH_UNIT => {
                 return Ok(UnitLookup::NotLoaded);
             }
-            answered => answered?.body().deserialize()?,
+            call_answer => call_answer?.body().deserialize()?,
         };
         self.lookup_at(name, path).await
     }
@@ -484,7 +512,7 @@ impl BusConnection {
             None => UnitKindProperties::default(),
         };
         Ok(FetchedUnit {
-            activity: activity_from(&properties),
+            activity: Activity::from(&properties),
             facts: unit_facts_from(name, properties, &kind_properties),
             path,
         })
@@ -501,7 +529,7 @@ impl BusConnection {
             Err(LinkFailure::Refused(refusal)) if refusal.name == NO_SUCH_UNIT => {
                 return Ok(FailureReason::Unexplained);
             }
-            answered => answered?.body().deserialize()?,
+            call_answer => call_answer?.body().deserialize()?,
         };
         match self.all_properties(&path, interface).await {
             Err(LinkFailure::Refused(refusal)) if refusal.name == UNKNOWN_OBJECT => {
@@ -527,16 +555,16 @@ impl BusConnection {
         if self.early_signals.is_empty()
             && let SignalStreamState::Open = self.signal_stream_state
         {
-            let arrived = self.signal_stream.next().await;
-            self.keep_arrived_signal(arrived);
+            let signal_arrival = SignalArrival::from(self.signal_stream.next().await);
+            self.keep_arrived_signal(signal_arrival);
         }
     }
 
     pub(crate) fn take_signals(&mut self) -> SignalBatch {
         while let SignalStreamState::Open = self.signal_stream_state
-            && let Some(arrived) = self.signal_stream.next().now_or_never()
+            && let Some(next_message) = self.signal_stream.next().now_or_never()
         {
-            self.keep_arrived_signal(arrived);
+            self.keep_arrived_signal(SignalArrival::from(next_message));
         }
         let signals = mem::take(&mut self.early_signals);
         match self.signal_stream_state {
@@ -722,7 +750,7 @@ fn parse_signal(message: &Message) -> BusMessage {
             if changed_interface == UNIT_INTERFACE {
                 BusMessage::Signal(Signal::UnitChanged {
                     path: OwnedObjectPath::from(path.to_owned()),
-                    activity: activity_from(&changed),
+                    activity: Activity::from(&changed),
                 })
             } else {
                 BusMessage::Unrelated
@@ -732,17 +760,19 @@ fn parse_signal(message: &Message) -> BusMessage {
     }
 }
 
-fn activity_from(properties: &UnitProperties) -> Activity {
-    let monotonic = |micros: Option<u64>| {
-        micros
-            .filter(|micros| *micros != 0)
-            .map(Duration::from_micros)
-    };
-    Activity {
-        state: properties.active_state.as_deref().map(active_state_from),
-        inactive_exit: monotonic(properties.inactive_exit_timestamp_monotonic),
-        active_enter: monotonic(properties.active_enter_timestamp_monotonic),
-        active_exit: monotonic(properties.active_exit_timestamp_monotonic),
+impl From<&UnitProperties> for Activity {
+    fn from(properties: &UnitProperties) -> Self {
+        let monotonic = |micros: Option<u64>| {
+            micros
+                .filter(|micros| *micros != 0)
+                .map(Duration::from_micros)
+        };
+        Activity {
+            state: properties.active_state.as_deref().map(active_state_from),
+            inactive_exit: monotonic(properties.inactive_exit_timestamp_monotonic),
+            active_enter: monotonic(properties.active_enter_timestamp_monotonic),
+            active_exit: monotonic(properties.active_exit_timestamp_monotonic),
+        }
     }
 }
 
@@ -767,23 +797,26 @@ mod tests {
 
     #[test]
     fn unit_properties_decode_from_a_dictionary_of_variants() {
-        let reply = Message::signal(MANAGER_PATH, PROPERTIES_INTERFACE, "PropertiesChanged")
-            .build(&HashMap::from([
-                ("Id", Variant::from("slow.service")),
-                (
-                    "After",
-                    Variant::from(vec!["basic.target", "network.target"]),
-                ),
-                ("JobTimeoutUSec", Variant::from(u64::MAX)),
-                (
-                    "ActiveEnterTimestampMonotonic",
-                    Variant::from(4_000_000_u64),
-                ),
-                ("Unrelated", Variant::from(true)),
-            ]))
-            .expect("a dictionary of variants builds");
-        let properties: UnitProperties =
-            reply.body().deserialize().expect("the dictionary decodes");
+        let properties_changed =
+            Message::signal(MANAGER_PATH, PROPERTIES_INTERFACE, "PropertiesChanged")
+                .build(&HashMap::from([
+                    ("Id", Variant::from("slow.service")),
+                    (
+                        "After",
+                        Variant::from(vec!["basic.target", "network.target"]),
+                    ),
+                    ("JobTimeoutUSec", Variant::from(u64::MAX)),
+                    (
+                        "ActiveEnterTimestampMonotonic",
+                        Variant::from(4_000_000_u64),
+                    ),
+                    ("Unrelated", Variant::from(true)),
+                ]))
+                .expect("a dictionary of variants builds");
+        let properties: UnitProperties = properties_changed
+            .body()
+            .deserialize()
+            .expect("the dictionary decodes");
         assert_eq!(properties.id.as_deref(), Some("slow.service"));
         assert_eq!(
             properties.after,
@@ -791,7 +824,7 @@ mod tests {
         );
         assert_eq!(properties.job_timeout_u_sec, Some(u64::MAX));
         assert_eq!(
-            activity_from(&properties).active_enter,
+            Activity::from(&properties).active_enter,
             Some(Duration::from_secs(4))
         );
         assert_eq!(properties.description, None);

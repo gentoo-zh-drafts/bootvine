@@ -1,4 +1,4 @@
-use std::io;
+use std::{env::VarError, io};
 
 #[cfg(feature = "openrc")]
 use bootvine_openrc_link::OpenrcError;
@@ -16,6 +16,8 @@ pub enum RunError {
     Openrc(#[from] OpenrcError),
     #[error("console: {0}")]
     Console(#[from] io::Error),
+    #[error("reading SERVICE_RESULT: {0}")]
+    ServiceResult(#[from] VarError),
     #[error("{0}")]
     Watch(WatchFailure),
     #[error("no supported service manager is running")]

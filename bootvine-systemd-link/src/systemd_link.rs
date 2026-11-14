@@ -16,6 +16,7 @@ use bootvine_screen::{
     service_manager::ServiceManager,
 };
 use futures::{Stream, stream};
+use tracing::warn;
 
 use crate::{
     boot_feed::boot_change_stream,
@@ -80,13 +81,17 @@ impl ServiceManager for SystemdLink {
     }
 
     async fn boot_progress(&self) -> BootProgress {
-        let Ok(mut connection) = system_connection().await else {
-            return BootProgress::Finished;
+        let asked_progress = match system_connection().await {
+            Ok(mut connection) => connection.boot_progress().await,
+            Err(unreachable) => Err(unreachable),
         };
-        connection
-            .boot_progress()
-            .await
-            .unwrap_or(BootProgress::Finished)
+        match asked_progress {
+            Ok(boot_progress) => boot_progress,
+            Err(error) => {
+                warn!(error = %error, "could not ask systemd whether the boot finished");
+                BootProgress::Finished
+            }
+        }
     }
 
     fn boot_changes(

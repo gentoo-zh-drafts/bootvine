@@ -55,14 +55,14 @@ pub(crate) fn parse_request(file: &Path, text: &str) -> RequestFile {
         enabled_escape: false,
         ..ParseOption::default()
     };
-    let parsed = match Ini::load_from_str_opt(text, verbatim_values) {
-        Ok(parsed) => parsed,
+    let request_ini = match Ini::load_from_str_opt(text, verbatim_values) {
+        Ok(request_ini) => request_ini,
         Err(error) => {
             warn!(path = %file.display(), error = %error, "password request is not an ini file");
             return RequestFile::Malformed;
         }
     };
-    let ask_section = parsed.section(Some(ASK_SECTION));
+    let ask_section = request_ini.section(Some(ASK_SECTION));
     let field = |key: &str| ask_section.and_then(|section| section.get(key));
     let flag = |key: &str| field(key).is_some_and(is_true);
     let Some(socket) = field("Socket") else {

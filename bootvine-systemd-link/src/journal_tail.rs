@@ -1,5 +1,6 @@
 use std::{
-    fs, io,
+    fs, io, iter,
+    sync::mpsc::TryRecvError,
     time::{Duration, Instant},
 };
 
@@ -32,9 +33,14 @@ enum JournalReadError {
     Journal(#[from] SdJournalError),
 }
 
+enum ManagerSummary {
+    Logged,
+    NotYetLogged,
+}
+
 struct UnitMessages {
     oldest_first: Vec<String>,
-    manager_reported: bool,
+    manager_summary: ManagerSummary,
 }
 
 enum JournalGrowth {
@@ -73,13 +79,15 @@ fn read_settled_messages(
     });
     let new_unit_entries = live_journal.subscribe(unit_filter)?;
     loop {
-        let messages = scan_newest_messages(&Journal::open_default()?, unit, &boot_id, wanted)?;
-        if messages.manager_reported {
-            return Ok(messages.oldest_first);
+        let unit_messages =
+            scan_newest_messages(&Journal::open_default()?, unit, &boot_id, wanted)?;
+        match unit_messages.manager_summary {
+            ManagerSummary::Logged => return Ok(unit_messages.oldest_first),
+            ManagerSummary::NotYetLogged => {}
         }
         match wait_for_new_entries(&mut live_journal, &new_unit_entries, deadline)? {
             JournalGrowth::Grew => {}
-            JournalGrowth::DeadlinePassed => return Ok(messages.oldest_first),
+            JournalGrowth::DeadlinePassed => return Ok(unit_messages.oldest_first),
         }
     }
 }
@@ -97,13 +105,26 @@ fn wait_for_new_entries(
     new_entries: &LiveSubscription,
     deadline: Instant,
 ) -> Result<JournalGrowth, SdJournalError> {
-    while Instant::now() < deadline {
-        if live_journal.poll_once()? > 0 {
-            while new_entries.try_recv().is_ok() {}
-            return Ok(JournalGrowth::Grew);
-        }
+    let journal_growth =
+        iter::from_fn(|| (Instant::now() < deadline).then(|| live_journal.poll_once()))
+            .find_map(|delivered_count| match delivered_count {
+                Ok(0) => None,
+                Ok(_) => Some(Ok(JournalGrowth::Grew)),
+                Err(error) => Some(Err(error)),
+            })
+            .unwrap_or(Ok(JournalGrowth::DeadlinePassed))?;
+    match journal_growth {
+        JournalGrowth::Grew => iter::from_fn(|| match new_entries.try_recv() {
+            Ok(delivered_entry) => Some(delivered_entry),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                unreachable!("the live journal outlives its subscriptions while it is polled")
+            }
+        })
+        .try_for_each(|delivered_entry| delivered_entry.map(drop))?,
+        JournalGrowth::DeadlinePassed => {}
     }
-    Ok(JournalGrowth::DeadlinePassed)
+    Ok(journal_growth)
 }
 
 fn scan_newest_messages(
@@ -120,24 +141,23 @@ fn scan_newest_messages(
         });
     });
     query.seek_tail().limit(ENTRIES_SCANNED);
-    let mut newest_first = Vec::new();
-    let mut manager_reported = false;
-    for entry in query.iter()? {
-        if newest_first.len() >= wanted {
-            break;
-        }
-        let entry = entry?;
-        if is_manager_summary(&entry) {
-            manager_reported = true;
-        } else if let Some(message) = entry_message(&entry) {
-            newest_first.push(message);
-        }
-    }
-    newest_first.reverse();
-    Ok(UnitMessages {
-        oldest_first: newest_first,
-        manager_reported,
-    })
+    query.iter()?.try_fold(
+        UnitMessages {
+            oldest_first: Vec::new(),
+            manager_summary: ManagerSummary::NotYetLogged,
+        },
+        |mut unit_messages, entry| {
+            let entry = entry?;
+            if is_manager_summary(&entry) {
+                unit_messages.manager_summary = ManagerSummary::Logged;
+            } else if unit_messages.oldest_first.len() < wanted
+                && let Some(message) = entry_message(&entry)
+            {
+                unit_messages.oldest_first.insert(0, message);
+            }
+            Ok(unit_messages)
+        },
+    )
 }
 
 fn is_manager_summary(entry: &EntryRef) -> bool {

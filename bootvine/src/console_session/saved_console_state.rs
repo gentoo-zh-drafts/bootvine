@@ -1,4 +1,7 @@
-use std::{env, fs, io};
+use std::{
+    env::{self, VarError},
+    fs, io,
+};
 
 use bootvine_screen::service_manager::ServiceManager;
 use clap::ValueEnum;
@@ -43,10 +46,15 @@ pub fn restore_console_state(status_output_restore: StatusOutputRestore) -> Resu
         KERNEL_PRINTK,
         fs::read_to_string(SAVED_KERNEL_CONSOLE_LEVEL)?,
     )?;
-    let clean_exit =
-        env::var(SERVICE_RESULT_VARIABLE).is_ok_and(|result| result == CLEAN_SERVICE_RESULT);
-    if status_output_restore == StatusOutputRestore::UnlessCleanExit && clean_exit {
-        return Ok(());
+    match (status_output_restore, env::var(SERVICE_RESULT_VARIABLE)) {
+        (StatusOutputRestore::UnlessCleanExit, Ok(service_result))
+            if service_result == CLEAN_SERVICE_RESULT =>
+        {
+            return Ok(());
+        }
+        (_, Err(unreadable @ VarError::NotUnicode(_))) => return Err(unreadable.into()),
+        (StatusOutputRestore::Always, _)
+        | (StatusOutputRestore::UnlessCleanExit, Ok(_) | Err(VarError::NotPresent)) => {}
     }
     match DetectedManager::running()? {
         #[cfg(feature = "systemd")]
