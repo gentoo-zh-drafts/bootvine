@@ -15,6 +15,8 @@
         }
       ];
 
+      boot.kernelPackages = pkgs.linuxPackages_6_12;
+
       powerManagement = {
         powerDownCommands = "systemctl --no-block stop backdoor.service";
         resumeCommands = "systemctl --no-block restart backdoor.service";
@@ -30,6 +32,7 @@
         ];
         emptyDiskImages = [ 4096 ];
         useNixStoreImage = true;
+        sharedDirectories = lib.mkForce { };
         useEFIBoot = true;
       };
     };
