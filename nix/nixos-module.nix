@@ -16,6 +16,8 @@ let
   hasSettings = cfg.settings != { };
 in
 {
+  disabledModules = [ "services/system/bootvine.nix" ];
+
   options.services.bootvine = {
     enable = lib.mkEnableOption ''
       a live dependency tree of systemd jobs on the boot console. With a
