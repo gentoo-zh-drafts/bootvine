@@ -1,14 +1,21 @@
 use std::{
-    io,
+    fs, io,
+    os::fd::OwnedFd,
+    path::{Path, PathBuf},
     str::Chars,
     time::{Duration, Instant},
 };
 
+use journal::{DirectoryReader, SdkError};
+use rustix::{
+    event::{PollFd, PollFlags, Timespec, poll},
+    fs::inotify::{self, CreateFlags, WatchFlags},
+};
 use tokio::task::spawn_blocking;
 use tracing::warn;
 
-use crate::journal_library::{JournalStep, OpenJournal, current_boot_id};
-
+const BOOT_ID_PATH: &str = "/proc/sys/kernel/random/boot_id";
+const JOURNAL_ROOTS: [&str; 2] = ["/run/log/journal", "/var/log/journal"];
 const UNIT_FIELDS: [&str; 4] = ["_SYSTEMD_UNIT", "UNIT", "_SYSTEMD_USER_UNIT", "USER_UNIT"];
 const MANAGER_SUMMARY_MESSAGE_IDS: [&str; 10] = [
     "7d4958e842da4a758f6c1cdc7b36dcc5",
@@ -25,9 +32,22 @@ const MANAGER_SUMMARY_MESSAGE_IDS: [&str; 10] = [
 const ENTRIES_SCANNED: usize = 200;
 const ESCAPE: char = '\u{1b}';
 
+#[derive(Debug, thiserror::Error)]
+enum JournalReadError {
+    #[error("{0}")]
+    Filesystem(#[from] io::Error),
+    #[error("reading the journal files: {0}")]
+    JournalFiles(#[from] SdkError),
+}
+
 struct UnitMessages {
     oldest_first: Vec<String>,
     manager_reported: bool,
+}
+
+enum JournalGrowth {
+    Grew,
+    DeadlinePassed,
 }
 
 pub(crate) async fn settled_unit_messages(
@@ -45,39 +65,114 @@ pub(crate) async fn settled_unit_messages(
     .expect("reading the journal does not panic")
 }
 
-fn read_settled_messages(unit: &str, wanted: usize, deadline: Instant) -> io::Result<Vec<String>> {
-    let mut journal = OpenJournal::open_all()?;
-    match_unit_in_this_boot(&mut journal, unit)?;
-    journal.watch_for_new_entries()?;
+fn read_settled_messages(
+    unit: &str,
+    wanted: usize,
+    deadline: Instant,
+) -> Result<Vec<String>, JournalReadError> {
+    let boot_id = fs::read_to_string(BOOT_ID_PATH)?.trim().replace('-', "");
     loop {
-        let messages = scan_newest_messages(&mut journal, wanted)?;
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .filter(|left| !left.is_zero());
-        match remaining {
-            Some(left) if !messages.manager_reported => {
-                journal.wait(left)?;
-            }
-            _ => return Ok(messages.oldest_first),
+        let directories = journal_directories()?;
+        let journal_changes = watch_journal_directories(&directories)?;
+        let messages = scan_newest_messages(&directories, unit, &boot_id, wanted)?;
+        if messages.manager_reported {
+            return Ok(messages.oldest_first);
+        }
+        match wait_for_journal_change(&journal_changes, deadline)? {
+            JournalGrowth::Grew => {}
+            JournalGrowth::DeadlinePassed => return Ok(messages.oldest_first),
         }
     }
 }
 
-fn scan_newest_messages(journal: &mut OpenJournal, wanted: usize) -> io::Result<UnitMessages> {
-    journal.seek_tail()?;
+fn directory_entries(directory: &Path) -> io::Result<Vec<PathBuf>> {
+    match fs::read_dir(directory) {
+        Ok(entries) => entries.map(|entry| Ok(entry?.path())).collect(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+fn journal_directories() -> io::Result<Vec<PathBuf>> {
+    let machine_directories = JOURNAL_ROOTS
+        .iter()
+        .map(|root| directory_entries(Path::new(root)))
+        .collect::<io::Result<Vec<_>>>()?;
+    Ok(JOURNAL_ROOTS
+        .iter()
+        .map(PathBuf::from)
+        .chain(machine_directories.into_iter().flatten())
+        .filter(|directory| directory.is_dir())
+        .collect())
+}
+
+fn is_journal_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".journal") || name.ends_with(".journal~"))
+}
+
+fn watch_journal_directories(directories: &[PathBuf]) -> io::Result<OwnedFd> {
+    let journal_changes = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK)?;
+    directories.iter().try_for_each(|directory| {
+        inotify::add_watch(
+            &journal_changes,
+            directory.as_path(),
+            WatchFlags::MODIFY | WatchFlags::CREATE | WatchFlags::MOVED_TO,
+        )
+        .map(drop)
+    })?;
+    Ok(journal_changes)
+}
+
+fn wait_for_journal_change(
+    journal_changes: &OwnedFd,
+    deadline: Instant,
+) -> io::Result<JournalGrowth> {
+    let Some(remaining) = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|left| !left.is_zero())
+    else {
+        return Ok(JournalGrowth::DeadlinePassed);
+    };
+    let timeout = Timespec::try_from(remaining).map_err(io::Error::other)?;
+    let mut watched = [PollFd::new(journal_changes, PollFlags::IN)];
+    Ok(match poll(&mut watched, Some(&timeout))? {
+        0 => JournalGrowth::DeadlinePassed,
+        _ => JournalGrowth::Grew,
+    })
+}
+
+fn scan_newest_messages(
+    directories: &[PathBuf],
+    unit: &str,
+    boot_id: &str,
+    wanted: usize,
+) -> Result<UnitMessages, JournalReadError> {
+    let journal_files = directories
+        .iter()
+        .map(|directory| directory_entries(directory))
+        .collect::<io::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .filter(|path| is_journal_file(path))
+        .collect::<Vec<_>>();
+    let mut reader = DirectoryReader::open_files(&journal_files)?;
+    UNIT_FIELDS.iter().try_for_each(|field| {
+        reader.add_match(format!("{field}={unit}").as_bytes());
+        reader.add_disjunction()
+    })?;
+    reader.add_conjunction()?;
+    reader.add_match(format!("_BOOT_ID={boot_id}").as_bytes());
+    reader.seek_tail();
     let mut newest_first = Vec::new();
     let mut manager_reported = false;
     let mut scanned = 0;
-    while newest_first.len() < wanted
-        && scanned < ENTRIES_SCANNED
-        && matches!(journal.step_back(), Ok(JournalStep::Moved))
-    {
+    while newest_first.len() < wanted && scanned < ENTRIES_SCANNED && reader.previous()? {
         scanned += 1;
-        if is_manager_summary(journal).unwrap_or(true) {
+        if is_manager_summary(&mut reader)? {
             manager_reported = true;
-            continue;
-        }
-        if let Ok(Some(message)) = entry_message(journal) {
+        } else if let Some(message) = entry_message(&mut reader)? {
             newest_first.push(message);
         }
     }
@@ -88,13 +183,20 @@ fn scan_newest_messages(journal: &mut OpenJournal, wanted: usize) -> io::Result<
     })
 }
 
-fn match_unit_in_this_boot(journal: &mut OpenJournal, unit: &str) -> io::Result<()> {
-    UNIT_FIELDS.iter().try_for_each(|field| {
-        journal.add_match(field, unit)?;
-        journal.add_disjunction()
-    })?;
-    journal.add_conjunction()?;
-    journal.add_match("_BOOT_ID", &current_boot_id()?)
+fn field_value(reader: &mut DirectoryReader, field: &str) -> Result<Option<Vec<u8>>, SdkError> {
+    Ok(reader
+        .get_entry_payload(field.as_bytes())?
+        .map(|payload| payload.get(field.len() + 1..).unwrap_or_default().to_vec()))
+}
+
+fn is_manager_summary(reader: &mut DirectoryReader) -> Result<bool, SdkError> {
+    Ok(
+        field_value(reader, "MESSAGE_ID")?.is_some_and(|message_id| {
+            MANAGER_SUMMARY_MESSAGE_IDS
+                .iter()
+                .any(|summary_id| summary_id.as_bytes() == message_id)
+        }),
+    )
 }
 
 #[expect(
@@ -102,20 +204,9 @@ fn match_unit_in_this_boot(journal: &mut OpenJournal, unit: &str) -> io::Result<
     reason = "journal fields may hold arbitrary bytes and are only shown on screen, so a \
               replacement character beats dropping the message"
 )]
-fn field_text(journal: &mut OpenJournal, field: &str) -> io::Result<Option<String>> {
-    Ok(journal
-        .field_bytes(field)?
-        .map(|value| String::from_utf8_lossy(&value).into_owned()))
-}
-
-fn is_manager_summary(journal: &mut OpenJournal) -> io::Result<bool> {
-    Ok(field_text(journal, "MESSAGE_ID")?
-        .is_some_and(|message_id| MANAGER_SUMMARY_MESSAGE_IDS.contains(&message_id.as_str())))
-}
-
-fn entry_message(journal: &mut OpenJournal) -> io::Result<Option<String>> {
-    Ok(field_text(journal, "MESSAGE")?
-        .map(|message| printable_line(&message))
+fn entry_message(reader: &mut DirectoryReader) -> Result<Option<String>, SdkError> {
+    Ok(field_value(reader, "MESSAGE")?
+        .map(|message| printable_line(&String::from_utf8_lossy(&message)))
         .filter(|line| !line.is_empty()))
 }
 
@@ -141,7 +232,7 @@ fn skip_escape_sequence(characters: &mut Chars<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
+    use std::{env, process::Command};
 
     use super::*;
 
@@ -154,6 +245,22 @@ mod tests {
         let lines = read_settled_messages(&unit, 6, Instant::now()).expect("readable journal");
         lines.iter().for_each(|line| println!("{line}"));
         assert!(!lines.is_empty());
+    }
+
+    #[test]
+    #[ignore = "writes to this machine's journal: cargo test journal_write_wakes -- --ignored"]
+    fn journal_write_wakes_the_wait() {
+        let journal_changes =
+            watch_journal_directories(&journal_directories().expect("journal directories list"))
+                .expect("journal directories are watched");
+        let started = Instant::now();
+        Command::new("systemd-cat")
+            .args(["-t", "bootvine-test", "echo", "wake the wait"])
+            .status()
+            .expect("systemd-cat runs");
+        let growth = wait_for_journal_change(&journal_changes, started + Duration::from_secs(5))
+            .expect("the wait works");
+        assert!(matches!(growth, JournalGrowth::Grew));
     }
 
     #[test]

@@ -20,7 +20,6 @@ futures = { version = "0.3.34", default-features = false, features = [
   "std",
   "async-await",
 ] }
-libloading = "0.9.1"
 rustix = { version = "1.1.5", features = [
   "event",
   "fs",
@@ -31,6 +30,7 @@ rustix = { version = "1.1.5", features = [
   "time",
 ] }
 serde = { version = "1.0.228", default-features = false }
+systemd-journal-sdk = "0.10.0"
 thiserror = "2.0.12"
 tokio = { version = "1.54.0", default-features = false, features = [
   "io-util",

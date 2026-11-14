@@ -11,7 +11,6 @@ depends() {
 
 install() {
     inst_binary bootvine
-    inst_libdir_file "libsystemd.so.0*"
     inst_simple "$systemdsystemunitdir/bootvine.service"
     inst_simple "$systemdsystemunitdir/systemd-hibernate-resume.service.d/bootvine.conf"
     if [[ -f /etc/bootvine.toml ]]; then

@@ -2,7 +2,6 @@
 
 mod boot_feed;
 mod descriptor_streams;
-mod journal_library;
 mod journal_tail;
 mod link_error;
 mod monotonic_clock;

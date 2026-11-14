@@ -102,8 +102,7 @@ Rust and a C toolchain, and no library headers.
 4. Optionally, show the boot from the initrd. This needs an initramfs with
    systemd in it, built by dracut or mkinitcpio; initramfs-tools has no
    systemd, so on Debian and Ubuntu releases that use it bootvine starts in
-   stage 2 only. Either hook also copies `libsystemd.so.0`, which bootvine
-   loads to show the journal lines of failed units.
+   stage 2 only.
 
    With [dracut](https://github.com/dracut-ng/dracut-ng):
 

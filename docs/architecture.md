@@ -7,11 +7,11 @@ while it does. None of this is needed to install or configure it.
 
 - **systemd ≥ 246 as PID 1.** bootvine reads the jobs and units from the
   service manager over D-Bus.
-- **libsystemd at run time.** bootvine loads `libsystemd.so.0` when it reads
-  the last journal lines of a failed unit; see [failures](#failures). Without
-  it, failures show without those lines. Building needs neither libsystemd
-  nor libdbus: D-Bus goes through [zbus](https://github.com/dbus2/zbus), in
-  pure Rust; see [systemd's private socket](#systemds-private-socket).
+- **No system libraries.** D-Bus goes through
+  [zbus](https://github.com/dbus2/zbus) and the journal through
+  [systemd-journal-sdk](https://github.com/netdata/systemd-journal-sdk), both in pure Rust; see
+  [systemd's private socket](#systemds-private-socket) and
+  [failures](#failures).
 - **A virtual terminal.** It draws on `tty12` and switches the console to it.
 
 ## Overview
@@ -173,9 +173,9 @@ sequenceDiagram
     Bootvine->>PID1: GetUnit, Properties.GetAll on the unit type
     PID1->>Bootvine: Result, ExecMainCode, ExecMainStatus, StatusText
     Note over Bootvine: reason in the failure panel at once
-    Bootvine->>Journal: sd_journal, matching the unit in this boot
+    Bootvine->>Journal: the journal files, matching the unit in this boot
     Journal->>Bootvine: last messages, newest last
-    Note over Bootvine: until PID 1's own line about the failure is there, sd_journal_wait, at most 1 s
+    Note over Bootvine: until PID 1's own line about the failure is there, waking on inotify, at most 1 s
     Note over Bootvine: lines in the failure panel
 ```
 
@@ -187,19 +187,23 @@ sequenceDiagram
   its reason reach the screen first. PID 1 logs its own "Failed with result…"
   or "Failed to start…" line once the unit's process has exited, so bootvine
   takes that line's presence as the sign that the unit's own lines are in, and
-  until then waits for the journal to grow with `sd_journal_wait`.
+  until then waits for the journal to grow: journald truncates a journal file
+  to its own size after each write, which inotify reports on the journal
+  directories.
 - **The journal lines** match the unit the same way `journalctl -u` does
   (`_SYSTEMD_UNIT=` or `UNIT=`, in the current boot), without PID 1's own
   "Starting…", "Failed with result…" and "Failed to start…" lines, which the
-  reason already covers. In the initrd they come from `/run/log/journal`. The
-  journal is opened without `SD_JOURNAL_LOCAL_ONLY`: libsystemd caches the
-  initrd's machine ID, which would hide the real root's files after the
-  switch, and the boot ID match already keeps other machines out.
-- **libsystemd** is loaded with `dlopen` rather than calling `journalctl`,
-  which may not be in the initramfs, and rather than linked, so that building
-  needs no libsystemd headers. The dracut module and the mkinitcpio hook copy
-  `libsystemd.so.0` into the initramfs; the Nix package adds systemd's `lib`
-  to the binary's `RUNPATH`, which brings it into the NixOS initrd's closure.
+  reason already covers. In the initrd they come from `/run/log/journal`.
+  Every read opens all files under `/run/log/journal` and `/var/log/journal`,
+  whichever machine ID they belong to, so the real root's files show after
+  the switch, and the boot ID match keeps other machines out.
+- **The journal files** are read by
+  [systemd-journal-sdk](https://github.com/netdata/systemd-journal-sdk) rather than
+  through libsystemd or `journalctl`: building needs no libsystemd headers,
+  and nothing beyond the binary has to be in the initramfs. Each read lists
+  and opens the files anew, so it sees entries written since the last one and
+  files journald rotated or created meanwhile, and the inotify watches are
+  set up before that read, so nothing written in between goes unnoticed.
 
 ## Surviving the switch to the real root
 
@@ -395,7 +399,7 @@ answered by `ShellQueryAnswered`.
 | Crate | Holds | Depends on |
 | --- | --- | --- |
 | `bootvine-screen` | the model, the view and the screen application: `Model`, `Message`, `Command`, `Subscription`, `update`, `view`, `subscriptions`; settings parsing; the `ServiceManager` trait | ratatui's core and widgets, serde, petgraph, `futures-core` and other pure libraries |
-| `bootvine-systemd-link` | `SystemdLink`: the job feed over the private socket, journal lines, the password agent, status output and the systemd vocabulary | `bootvine-screen`, zbus, libsystemd loaded at run time, tokio, rustix |
+| `bootvine-systemd-link` | `SystemdLink`: the job feed over the private socket, journal lines, the password agent, status output and the systemd vocabulary | `bootvine-screen`, zbus, systemd-journal-sdk, tokio, rustix |
 | `bootvine-openrc-link` | `OpenrcLink`: service state from `/run/openrc`, the dependency cache and the OpenRC vocabulary | `bootvine-screen`, inotify, rustix |
 | `bootvine` | the live runtime, the console (virtual terminal, `/dev/vcs12`, printk, font, resume console), the screen loop, install and `main` | the screen crate and whichever link crates its features enable |
 
@@ -405,7 +409,7 @@ everything else is private, and `#![deny(unreachable_pub)]` keeps it so.
 The compiler keeps this shape:
 
 - **No effects in the screen.** `bootvine-screen` does not depend on tokio,
-  rustix, zbus, libsystemd, crossterm or futures, so it cannot call them.
+  rustix, zbus, systemd-journal-sdk, crossterm or futures, so it cannot call them.
   `futures-core` only defines the `Stream` trait. The parts of std that touch
   the system (`std::fs`, `std::env`, `std::process`, path metadata such as
   `Path::exists`, the wall clock) are caught by the
