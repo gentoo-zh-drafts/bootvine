@@ -20,6 +20,7 @@ futures = { version = "0.3.34", default-features = false, features = [
   "std",
   "async-await",
 ] }
+rust-ini = "0.21.3"
 rustix = { version = "1.1.5", features = [
   "event",
   "fs",
@@ -30,6 +31,7 @@ rustix = { version = "1.1.5", features = [
   "time",
 ] }
 serde = { version = "1.0.228", default-features = false }
+strip-ansi-escapes = "0.2.1"
 systemd-journal-sdk = "0.10.0"
 thiserror = "2.0.12"
 tokio = { version = "1.54.0", default-features = false, features = [

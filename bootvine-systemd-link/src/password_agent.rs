@@ -19,6 +19,7 @@ use futures::{
     future::{ready, select},
     stream,
 };
+use ini::{Ini, ParseOption};
 use rustix::{
     io::Errno,
     process::{Pid, PidfdFlags, pidfd_open, test_kill_process},
@@ -37,7 +38,7 @@ use crate::{
 
 const REQUESTS: &str = "/run/systemd/ask-password";
 const REQUEST_PREFIX: &str = "ask.";
-const ASK_SECTION: &str = "[Ask]";
+const ASK_SECTION: &str = "Ask";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RequestFile {
@@ -49,20 +50,20 @@ pub(crate) enum RequestFile {
 
 #[must_use]
 pub(crate) fn parse_request(file: &Path, text: &str) -> RequestFile {
-    let fields: Vec<(&str, &str)> = text
-        .lines()
-        .map(str::trim)
-        .skip_while(|line| *line != ASK_SECTION)
-        .skip(1)
-        .take_while(|line| !line.starts_with('['))
-        .filter_map(|line| line.split_once('='))
-        .collect();
-    let field = |key: &str| {
-        fields
-            .iter()
-            .find(|(name, _)| *name == key)
-            .map(|(_, value)| *value)
+    let verbatim_values = ParseOption {
+        enabled_quote: false,
+        enabled_escape: false,
+        ..ParseOption::default()
     };
+    let parsed = match Ini::load_from_str_opt(text, verbatim_values) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            warn!(path = %file.display(), error = %error, "password request is not an ini file");
+            return RequestFile::Malformed;
+        }
+    };
+    let ask_section = parsed.section(Some(ASK_SECTION));
+    let field = |key: &str| ask_section.and_then(|section| section.get(key));
     let flag = |key: &str| field(key).is_some_and(is_true);
     let Some(socket) = field("Socket") else {
         warn!(path = %file.display(), "password request names no socket");

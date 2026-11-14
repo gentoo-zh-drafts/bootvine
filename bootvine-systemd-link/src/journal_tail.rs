@@ -2,7 +2,6 @@ use std::{
     fs, io,
     os::fd::OwnedFd,
     path::{Path, PathBuf},
-    str::Chars,
     time::{Duration, Instant},
 };
 
@@ -30,7 +29,6 @@ const MANAGER_SUMMARY_MESSAGE_IDS: [&str; 10] = [
     "98e322203f7a4ed290d09fe03c09fe15",
 ];
 const ENTRIES_SCANNED: usize = 200;
-const ESCAPE: char = '\u{1b}';
 
 #[derive(Debug, thiserror::Error)]
 enum JournalReadError {
@@ -211,23 +209,12 @@ fn entry_message(reader: &mut DirectoryReader) -> Result<Option<String>, SdkErro
 }
 
 fn printable_line(message: &str) -> String {
-    let mut characters = message.lines().next().unwrap_or_default().chars();
-    let mut printable = String::new();
-    while let Some(character) = characters.next() {
-        if character == ESCAPE {
-            skip_escape_sequence(&mut characters);
-        } else if !character.is_control() {
-            printable.push(character);
-        }
-    }
-    printable.trim_end().to_owned()
-}
-
-fn skip_escape_sequence(characters: &mut Chars<'_>) {
-    if characters.clone().next() == Some('[') {
-        characters.next();
-        characters.find(|character| ('@'..='~').contains(character));
-    }
+    strip_ansi_escapes::strip_str(message.lines().next().unwrap_or_default())
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -261,6 +248,16 @@ mod tests {
         let growth = wait_for_journal_change(&journal_changes, started + Duration::from_secs(5))
             .expect("the wait works");
         assert!(matches!(growth, JournalGrowth::Grew));
+    }
+
+    #[test]
+    fn printable_line_drops_hyperlinks_but_keeps_their_text() {
+        assert_eq!(
+            printable_line(
+                "see \u{1b}]8;;https://systemd.io\u{7}the docs\u{1b}]8;;\u{7}\tfor more"
+            ),
+            "see the docsfor more"
+        );
     }
 
     #[test]

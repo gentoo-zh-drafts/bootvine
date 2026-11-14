@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     future::{Future, pending, ready},
     io, mem,
     num::NonZeroUsize,
@@ -28,8 +27,9 @@ use tokio::{
 };
 use tracing::{error, warn};
 use zbus::{
-    Connection, DBusError, DynamicType, MatchRule, Message, MessageStream, OwnedObjectPath,
-    OwnedVariant, Variant, connection::Builder as ConnectionBuilder, message::Type as MessageType,
+    Connection, DBusError, DeserializeDict, DynamicType, MatchRule, Message, MessageStream,
+    OwnedObjectPath, OwnedVariant, Type, connection::Builder as ConnectionBuilder,
+    message::Type as MessageType, wire::DynamicDeserialize,
 };
 
 use crate::{
@@ -58,7 +58,31 @@ const UNLIMITED: Duration = Duration::from_micros(u64::MAX);
 const NO_SUCH_UNIT: &str = "org.freedesktop.systemd1.NoSuchUnit";
 const UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
 
-type PropertyMap = HashMap<String, OwnedVariant>;
+#[derive(Debug, Default, DeserializeDict, Type)]
+#[zbus(signature = "dict", rename_all = "PascalCase")]
+struct UnitProperties {
+    id: Option<String>,
+    description: Option<String>,
+    after: Option<Vec<String>>,
+    before: Option<Vec<String>>,
+    active_state: Option<String>,
+    inactive_exit_timestamp_monotonic: Option<u64>,
+    active_enter_timestamp_monotonic: Option<u64>,
+    active_exit_timestamp_monotonic: Option<u64>,
+    job_timeout_u_sec: Option<u64>,
+    job_running_timeout_u_sec: Option<u64>,
+}
+
+#[derive(Debug, Default, DeserializeDict, Type)]
+#[zbus(signature = "dict", rename_all = "PascalCase")]
+struct UnitKindProperties {
+    timeout_start_u_sec: Option<u64>,
+    timeout_stop_u_sec: Option<u64>,
+    timeout_u_sec: Option<u64>,
+    result: Option<String>,
+    exec_main_status: Option<i32>,
+    status_text: Option<String>,
+}
 
 pub(crate) enum SignalBatch {
     Open(Vec<Signal>),
@@ -447,14 +471,14 @@ impl BusConnection {
         name: &str,
         path: OwnedObjectPath,
     ) -> Result<FetchedUnit, LinkFailure> {
-        let properties = self.all_properties(&path, UNIT_INTERFACE).await?;
+        let properties: UnitProperties = self.all_properties(&path, UNIT_INTERFACE).await?;
         let kind_properties = match kind_interface(unit_kind_of(&unit_id(name, &properties))) {
             Some(interface) => self.all_properties(&path, interface).await?,
-            None => PropertyMap::new(),
+            None => UnitKindProperties::default(),
         };
         Ok(FetchedUnit {
-            facts: unit_facts_from(name, &properties, &kind_properties),
             activity: activity_from(&properties),
+            facts: unit_facts_from(name, properties, &kind_properties),
             path,
         })
     }
@@ -480,11 +504,11 @@ impl BusConnection {
         }
     }
 
-    async fn all_properties(
+    async fn all_properties<Properties: for<'body> DynamicDeserialize<'body>>(
         &mut self,
         path: &OwnedObjectPath,
         interface: &str,
-    ) -> Result<PropertyMap, LinkFailure> {
+    ) -> Result<Properties, LinkFailure> {
         Ok(self
             .call(path.as_str(), PROPERTIES_INTERFACE, "GetAll", &(interface,))
             .await?
@@ -533,20 +557,6 @@ impl BusConnection {
     }
 }
 
-fn text_property(properties: &PropertyMap, property: &str) -> Option<String> {
-    match properties.get(property).map(|value| &**value) {
-        Some(Variant::Str(text)) => Some(text.as_str().to_owned()),
-        _ => None,
-    }
-}
-
-fn unsigned_property(properties: &PropertyMap, property: &str) -> Option<u64> {
-    match properties.get(property).map(|value| &**value) {
-        Some(Variant::U64(number)) => Some(*number),
-        _ => None,
-    }
-}
-
 fn signal_name(number: i32) -> String {
     let name = match number {
         1 => "SIGHUP",
@@ -573,17 +583,16 @@ pub(crate) enum FailureReason {
     Unexplained,
 }
 
-impl From<&PropertyMap> for FailureReason {
-    fn from(properties: &PropertyMap) -> Self {
-        let Some(result) = text_property(properties, "Result").filter(|result| result != "success")
+impl From<&UnitKindProperties> for FailureReason {
+    fn from(properties: &UnitKindProperties) -> Self {
+        let Some(result) = properties
+            .result
+            .as_deref()
+            .filter(|result| *result != "success")
         else {
             return Self::Unexplained;
         };
-        let status = match properties.get("ExecMainStatus").map(|value| &**value) {
-            Some(Variant::I32(status)) => Some(*status),
-            _ => None,
-        };
-        let reason = match (result.as_str(), status) {
+        let reason = match (result, properties.exec_main_status) {
             ("exit-code", Some(status)) if status != 0 => format!("exited with status {status}"),
             ("exit-code", _) => "exited with an error".to_owned(),
             ("signal", Some(signal)) => format!("killed by {}", signal_name(signal)),
@@ -597,7 +606,11 @@ impl From<&PropertyMap> for FailureReason {
             (other, _) => other.to_owned(),
         };
         Self::Explained(
-            match text_property(properties, "StatusText").filter(|text| !text.is_empty()) {
+            match properties
+                .status_text
+                .as_deref()
+                .filter(|text| !text.is_empty())
+            {
                 Some(status_text) => format!("{reason}: {status_text}"),
                 None => reason,
             },
@@ -605,8 +618,8 @@ impl From<&PropertyMap> for FailureReason {
     }
 }
 
-fn unit_id(name: &str, properties: &PropertyMap) -> String {
-    text_property(properties, "Id").unwrap_or_else(|| name.to_owned())
+fn unit_id(name: &str, properties: &UnitProperties) -> String {
+    properties.id.clone().unwrap_or_else(|| name.to_owned())
 }
 
 fn kind_interface(kind: UnitKind) -> Option<&'static str> {
@@ -619,50 +632,47 @@ fn kind_interface(kind: UnitKind) -> Option<&'static str> {
     }
 }
 
-fn time_limit(properties: &PropertyMap, property: &str) -> Option<Duration> {
-    unsigned_property(properties, property)
+fn time_limit(micros: Option<u64>) -> Option<Duration> {
+    micros
         .map(Duration::from_micros)
         .filter(|limit| !limit.is_zero() && *limit != UNLIMITED)
 }
 
-fn timeouts_from(kind: UnitKind, unit: &PropertyMap, kind_specific: &PropertyMap) -> UnitTimeouts {
+fn timeouts_from(
+    kind: UnitKind,
+    unit: &UnitProperties,
+    kind_specific: &UnitKindProperties,
+) -> UnitTimeouts {
     let (start, stop) = if kind == UnitKind::Service {
-        ("TimeoutStartUSec", "TimeoutStopUSec")
+        (
+            kind_specific.timeout_start_u_sec,
+            kind_specific.timeout_stop_u_sec,
+        )
     } else {
-        ("TimeoutUSec", "TimeoutUSec")
+        (kind_specific.timeout_u_sec, kind_specific.timeout_u_sec)
     };
     UnitTimeouts {
-        start: time_limit(kind_specific, start),
-        stop: time_limit(kind_specific, stop),
-        job: time_limit(unit, "JobTimeoutUSec"),
-        job_running: time_limit(unit, "JobRunningTimeoutUSec"),
+        start: time_limit(start),
+        stop: time_limit(stop),
+        job: time_limit(unit.job_timeout_u_sec),
+        job_running: time_limit(unit.job_running_timeout_u_sec),
     }
 }
 
 fn unit_facts_from(
     name: &str,
-    properties: &PropertyMap,
-    kind_properties: &PropertyMap,
+    properties: UnitProperties,
+    kind_properties: &UnitKindProperties,
 ) -> UnitFacts {
-    let text = |property: &str| text_property(properties, property);
-    let names = |property: &str| match properties.get(property).map(|value| &**value) {
-        Some(Variant::Array(unit_names)) => unit_names
-            .inner()
-            .iter()
-            .filter_map(|unit_name| match unit_name {
-                Variant::Str(text) => Some(text.as_str().to_owned()),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    let id = unit_id(name, properties);
-    let timeouts = timeouts_from(unit_kind_of(&id), properties, kind_properties);
+    let id = unit_id(name, &properties);
+    let timeouts = timeouts_from(unit_kind_of(&id), &properties, kind_properties);
     systemd_unit_facts(
         id,
-        text("Description").filter(|description| !description.is_empty()),
-        names("After"),
-        names("Before"),
+        properties
+            .description
+            .filter(|description| !description.is_empty()),
+        properties.after.unwrap_or_default(),
+        properties.before.unwrap_or_default(),
         timeouts,
     )
 }
@@ -698,7 +708,7 @@ fn parse_signal(message: &Message) -> BusMessage {
         }
         (MANAGER_INTERFACE, "StartupFinished") => BusMessage::Signal(Signal::BootFinished),
         (PROPERTIES_INTERFACE, "PropertiesChanged") => {
-            let (changed_interface, changed, _invalidated): (String, PropertyMap, Vec<String>) =
+            let (changed_interface, changed, _invalidated): (String, UnitProperties, Vec<String>) =
                 message.body().deserialize().expect(
                     "PropertiesChanged carries an interface, changed and invalidated properties",
                 );
@@ -715,24 +725,26 @@ fn parse_signal(message: &Message) -> BusMessage {
     }
 }
 
-fn activity_from(properties: &PropertyMap) -> Activity {
-    let monotonic = |property: &str| {
-        unsigned_property(properties, property)
+fn activity_from(properties: &UnitProperties) -> Activity {
+    let monotonic = |micros: Option<u64>| {
+        micros
             .filter(|micros| *micros != 0)
             .map(Duration::from_micros)
     };
     Activity {
-        state: text_property(properties, "ActiveState")
-            .as_deref()
-            .map(active_state_from),
-        inactive_exit: monotonic("InactiveExitTimestampMonotonic"),
-        active_enter: monotonic("ActiveEnterTimestampMonotonic"),
-        active_exit: monotonic("ActiveExitTimestampMonotonic"),
+        state: properties.active_state.as_deref().map(active_state_from),
+        inactive_exit: monotonic(properties.inactive_exit_timestamp_monotonic),
+        active_enter: monotonic(properties.active_enter_timestamp_monotonic),
+        active_exit: monotonic(properties.active_exit_timestamp_monotonic),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use zbus::Variant;
+
     use super::*;
 
     #[test]
@@ -746,26 +758,50 @@ mod tests {
         ));
     }
 
-    fn limit_properties(entries: &[(&str, Duration)]) -> PropertyMap {
-        entries
-            .iter()
-            .map(|(name, limit)| {
-                let micros = u64::try_from(limit.as_micros()).unwrap_or(u64::MAX);
-                ((*name).to_owned(), OwnedVariant::from(micros))
-            })
-            .collect()
+    #[test]
+    fn unit_properties_decode_from_a_dictionary_of_variants() {
+        let reply = Message::signal(MANAGER_PATH, PROPERTIES_INTERFACE, "PropertiesChanged")
+            .build(&HashMap::from([
+                ("Id", Variant::from("slow.service")),
+                (
+                    "After",
+                    Variant::from(vec!["basic.target", "network.target"]),
+                ),
+                ("JobTimeoutUSec", Variant::from(u64::MAX)),
+                (
+                    "ActiveEnterTimestampMonotonic",
+                    Variant::from(4_000_000_u64),
+                ),
+                ("Unrelated", Variant::from(true)),
+            ]))
+            .expect("a dictionary of variants builds");
+        let properties: UnitProperties =
+            reply.body().deserialize().expect("the dictionary decodes");
+        assert_eq!(properties.id.as_deref(), Some("slow.service"));
+        assert_eq!(
+            properties.after,
+            Some(vec!["basic.target".to_owned(), "network.target".to_owned()])
+        );
+        assert_eq!(properties.job_timeout_u_sec, Some(u64::MAX));
+        assert_eq!(
+            activity_from(&properties).active_enter,
+            Some(Duration::from_secs(4))
+        );
+        assert_eq!(properties.description, None);
     }
 
     #[test]
     fn unlimited_timeouts_are_absent() {
-        let unit = limit_properties(&[
-            ("JobTimeoutUSec", UNLIMITED),
-            ("JobRunningTimeoutUSec", Duration::ZERO),
-        ]);
-        let service = limit_properties(&[
-            ("TimeoutStartUSec", UNLIMITED),
-            ("TimeoutStopUSec", Duration::from_secs(90)),
-        ]);
+        let unit = UnitProperties {
+            job_timeout_u_sec: Some(u64::MAX),
+            job_running_timeout_u_sec: Some(0),
+            ..UnitProperties::default()
+        };
+        let service = UnitKindProperties {
+            timeout_start_u_sec: Some(u64::MAX),
+            timeout_stop_u_sec: Some(90_000_000),
+            ..UnitKindProperties::default()
+        };
         assert_eq!(
             timeouts_from(UnitKind::Service, &unit, &service),
             UnitTimeouts {
@@ -775,21 +811,13 @@ mod tests {
         );
     }
 
-    fn reason_properties(result: &str, status: i32, status_text: &str) -> PropertyMap {
-        [
-            (
-                "Result",
-                OwnedVariant::try_from(Variant::from(result)).expect("a string has no fds"),
-            ),
-            ("ExecMainStatus", OwnedVariant::from(status)),
-            (
-                "StatusText",
-                OwnedVariant::try_from(Variant::from(status_text)).expect("a string has no fds"),
-            ),
-        ]
-        .into_iter()
-        .map(|(name, value)| (name.to_owned(), value))
-        .collect()
+    fn reason_properties(result: &str, status: i32, status_text: &str) -> UnitKindProperties {
+        UnitKindProperties {
+            result: Some(result.to_owned()),
+            exec_main_status: Some(status),
+            status_text: Some(status_text.to_owned()),
+            ..UnitKindProperties::default()
+        }
     }
 
     #[test]
@@ -822,8 +850,11 @@ mod tests {
 
     #[test]
     fn mounts_use_one_timeout_for_both_directions() {
-        let mount = limit_properties(&[("TimeoutUSec", Duration::from_secs(20))]);
-        let timeouts = timeouts_from(UnitKind::Mount, &PropertyMap::new(), &mount);
+        let mount = UnitKindProperties {
+            timeout_u_sec: Some(20_000_000),
+            ..UnitKindProperties::default()
+        };
+        let timeouts = timeouts_from(UnitKind::Mount, &UnitProperties::default(), &mount);
         assert_eq!(timeouts.start, Some(Duration::from_secs(20)));
         assert_eq!(timeouts.stop, Some(Duration::from_secs(20)));
     }
