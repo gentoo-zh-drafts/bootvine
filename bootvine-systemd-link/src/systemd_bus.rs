@@ -595,24 +595,39 @@ impl BusConnection {
     }
 }
 
-fn signal_name(number: i32) -> String {
-    let name = match number {
-        1 => "SIGHUP",
-        2 => "SIGINT",
-        3 => "SIGQUIT",
-        4 => "SIGILL",
-        5 => "SIGTRAP",
-        6 => "SIGABRT",
-        7 => "SIGBUS",
-        8 => "SIGFPE",
-        9 => "SIGKILL",
-        11 => "SIGSEGV",
-        13 => "SIGPIPE",
-        14 => "SIGALRM",
-        15 => "SIGTERM",
-        other => return format!("signal {other}"),
-    };
-    name.to_owned()
+enum ExitSignal {
+    Named(&'static str),
+    Numbered(i32),
+}
+
+impl From<i32> for ExitSignal {
+    fn from(number: i32) -> Self {
+        match number {
+            1 => Self::Named("SIGHUP"),
+            2 => Self::Named("SIGINT"),
+            3 => Self::Named("SIGQUIT"),
+            4 => Self::Named("SIGILL"),
+            5 => Self::Named("SIGTRAP"),
+            6 => Self::Named("SIGABRT"),
+            7 => Self::Named("SIGBUS"),
+            8 => Self::Named("SIGFPE"),
+            9 => Self::Named("SIGKILL"),
+            11 => Self::Named("SIGSEGV"),
+            13 => Self::Named("SIGPIPE"),
+            14 => Self::Named("SIGALRM"),
+            15 => Self::Named("SIGTERM"),
+            other => Self::Numbered(other),
+        }
+    }
+}
+
+impl Display for ExitSignal {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Named(name) => formatter.write_str(name),
+            Self::Numbered(number) => write!(formatter, "signal {number}"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -633,8 +648,8 @@ impl From<&UnitKindProperties> for FailureReason {
         let reason = match (result, properties.exec_main_status) {
             ("exit-code", Some(status)) if status != 0 => format!("exited with status {status}"),
             ("exit-code", _) => "exited with an error".to_owned(),
-            ("signal", Some(signal)) => format!("killed by {}", signal_name(signal)),
-            ("core-dump", Some(signal)) => format!("dumped core on {}", signal_name(signal)),
+            ("signal", Some(signal)) => format!("killed by {}", ExitSignal::from(signal)),
+            ("core-dump", Some(signal)) => format!("dumped core on {}", ExitSignal::from(signal)),
             ("timeout", _) => "timed out".to_owned(),
             ("watchdog", _) => "stopped answering the watchdog".to_owned(),
             ("start-limit-hit", _) => "restarted too often".to_owned(),
@@ -872,6 +887,14 @@ mod tests {
         assert_eq!(
             FailureReason::from(&reason_properties("signal", 11, "")),
             FailureReason::Explained("killed by SIGSEGV".to_owned())
+        );
+    }
+
+    #[test]
+    fn unnamed_signals_keep_their_number() {
+        assert_eq!(
+            FailureReason::from(&reason_properties("signal", 42, "")),
+            FailureReason::Explained("killed by signal 42".to_owned())
         );
     }
 
