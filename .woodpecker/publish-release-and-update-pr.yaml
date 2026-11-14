@@ -41,3 +41,5 @@ steps:
     environment: *release_env
     commands:
       - nix run --quiet .#open-or-update-release-pr
+    when:
+      - status: [success, failure]
