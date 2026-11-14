@@ -4,6 +4,7 @@ const CODEBERG_USER = "wvhulle-bot"
 const TEA_LOGIN_NAME = "codeberg"
 const RELEASE_ARCHIVE_PATTERN = "*.tar.gz"
 const CHECKSUM_FILE_NAME = "sha256sum.txt"
+const CONVENTIONAL_SUBJECT = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^()]+\))?!?: \S'
 
 def checksum-line [archive_digest: string, archive_name: string]: nothing -> string {
   $"($archive_digest)  ($archive_name)\n"
@@ -61,7 +62,23 @@ def "main check-commit-messages" [
   if $fetch_target_branch {
     ^git fetch --quiet origin $env.CI_COMMIT_TARGET_BRANCH
   }
-  ^convco check ...$revision_ranges
+  let unconventional_commits = $revision_ranges
+  | each {|revision_range|
+    let listing = ^git log --no-merges --format=%h%x09%s $revision_range | complete
+    if $listing.exit_code != 0 {
+      error make { msg: $"git log ($revision_range) failed: ($listing.stderr | str trim)" }
+    }
+    $listing.stdout | lines
+  }
+  | flatten
+  | parse "{hash}\t{subject}"
+  | where subject !~ $CONVENTIONAL_SUBJECT
+  if ($unconventional_commits | is-not-empty) {
+    let listed_commits = $unconventional_commits | each {|commit| $"  ($commit.hash) ($commit.subject)" } | str join "\n"
+    error make {
+      msg: $"These commit subjects do not follow Conventional Commits, `type\(scope\)!: description` with type one of build, chore, ci, docs, feat, fix, perf, refactor, revert, style or test:\n($listed_commits)"
+    }
+  }
 }
 
 def "main check-release-pr-is-current" []: nothing -> nothing {

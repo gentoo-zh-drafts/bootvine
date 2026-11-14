@@ -210,7 +210,6 @@
             inputsFrom = [ bootvine ];
             packages = [
               pkgs.prek
-              pkgs.convco
               pkgs.ast-grep
               pkgs.release-plz
               pkgs.git-cliff

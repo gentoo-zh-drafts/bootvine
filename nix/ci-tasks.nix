@@ -74,10 +74,7 @@ let
         authenticate-git-origin = [ pkgs.gitMinimal ];
         collect-release-archives = [ ];
         upload-release-assets = [ pkgs.tea ];
-        check-commit-messages = [
-          pkgs.convco
-          pkgs.gitMinimal
-        ];
+        check-commit-messages = [ pkgs.gitMinimal ];
         check-release-pr-is-current = [ pkgs.gitMinimal ];
       };
 
