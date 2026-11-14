@@ -9,8 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.4](https://codeberg.org/wvhulle/bootvine/compare/v0.1.3...v0.1.4) - 2026-11-13
 
+### Added
+
+- show a summary of errors before handing over to emergency or rescue mode
+- support OpenRC behind one ServiceManager trait
+- support Nix users without flakes
+
+### Changed
+
+- repaint on writes to the console instead of on timers
+- run the screen as an Elm application
+- split into bootvine-screen, bootvine-systemd-link and bootvine
+- use more enums instead of bools
+
+### Fixed
+
+- hand over to the emergency shell when needed
+- crash explicitly instead of silently ignoring errors
+- bootvine shows up too late during shutdown
+- auto-login as root to the demonstration VM
+
+### Build
+
+- publish bootvine-screen and bootvine-systemd-link with bootvine
+
 ### Miscellaneous
 
+- update tokio from yanked 1.54.0 to 1.54.1
 - update Cargo.lock dependencies
 
 ## [0.1.3](https://codeberg.org/wvhulle/bootvine/compare/v0.1.2...v0.1.3) - 2026-11-05
