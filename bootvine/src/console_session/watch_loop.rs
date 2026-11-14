@@ -103,7 +103,7 @@ async fn watch_on_console<Manager: ServiceManager>(
     print_shell_summary(&model, runtime.now())?;
     match mem::replace(&mut model.handover, Handover::Watching) {
         Handover::Ended(WatchEnding::Failed(failure)) => Err(RunError::Watch(failure)),
-        Handover::Ended(WatchEnding::BootCompleted) => Ok(StatusRelease::AfterBoot),
+        Handover::Ended(WatchEnding::BootCompleted) => Ok(StatusRelease::AtShutdown),
         Handover::Ended(WatchEnding::ViewerLeft | WatchEnding::ShellTookOver) => {
             Ok(StatusRelease::Immediately)
         }

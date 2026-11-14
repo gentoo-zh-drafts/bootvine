@@ -215,10 +215,17 @@ pub(crate) async fn restore_status_after_watch<Failure: From<LinkError>>(
     let silenced_status = SilencedStatus;
     let terminated = termination_request(signal(SignalKind::terminate()));
     let watched = watch.await;
-    if !matches!(watched, Ok(StatusRelease::Immediately)) {
-        select(pin!(terminated), pin!(boot_finish_or_lost_connection())).await;
+    match watched {
+        Ok(StatusRelease::Immediately) => silenced_status.restore()?,
+        Ok(StatusRelease::AtShutdown) => {
+            select(pin!(terminated), pin!(boot_finish_or_lost_connection())).await;
+            mem::forget(silenced_status);
+        }
+        Err(_) => {
+            select(pin!(terminated), pin!(boot_finish_or_lost_connection())).await;
+            silenced_status.restore()?;
+        }
     }
-    silenced_status.restore()?;
     watched.map(drop)
 }
 

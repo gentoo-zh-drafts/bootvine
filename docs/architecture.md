@@ -271,15 +271,18 @@ target being brought up, such as `poweroff.target` or `reboot.target`. It
 shows the units being stopped, nested under the units that have to stop first,
 until PID 1 hands over to `systemd-shutdown` and the connection closes.
 
-systemd runs every stop job before a start job, so other units start stopping
-while bootvine is still starting, and systemd prints their status lines on the
-terminal in front. The unit therefore keeps that window short:
+systemd dispatches the first stop jobs the moment the shutdown transaction
+starts, before `bootvine-shutdown.service` can run, so no ordering lets the
+unit silence systemd's status output in time. The boot viewer therefore leaves
+it silenced after its handover, and the shutdown unit restores it in
+`ExecStopPost`, once the viewer is done. The unit still keeps its own start
+short:
 
 - it is not ordered after the display manager, so it starts with the first
   stop jobs instead of after the display manager has stopped;
 - its `ExecStartPre=bootvine take-shutdown-console` switches to `tty12` and
-  silences systemd's status output before the viewer even starts. Any status
-  line printed before that lands on `tty12`, where the first frame covers it.
+  silences systemd's status output again, for a boot whose viewer was quit or
+  failed and restored it.
 
 If the display manager switches terminals while it stops, it is no longer
 running, so bootvine takes the console back.
@@ -326,12 +329,17 @@ While it runs, bootvine:
   another program wrote.
 
 It restores the log level when it hands the console back. It keeps running
-without touching the console until the boot finishes and only then restores the
-status output, so jobs still running cannot write over a display manager that
-started before them. This holds for a handover and for an error. Pressing a
-[quit key](guide.md#leaving-the-tree) or stopping the service restores the
-output at once, so a stuck boot stays visible; status lines can then reach a
-display manager that starts before the boot finishes. Kernel messages from before it starts are already on screen; see
+without touching the console until the boot finishes, so jobs still running
+cannot write over a display manager that started before them. After a
+handover it leaves the status output silenced for good: systemd only prints
+status lines while it starts or stops units, so nothing changes until the
+shutdown, and `bootvine-shutdown.service` restores it once that is over; see
+[shutdown](#shutdown). `ExecStopPost=bootvine restore-console-state
+--status-output unless-clean-exit` restores it anyway when the viewer did not
+exit cleanly. An error restores it once the boot finishes. Pressing a
+[quit key](guide.md#leaving-the-tree) restores the output at once, so a stuck
+boot stays visible; status lines can then reach a display manager that starts
+before the boot finishes. Kernel messages from before it starts are already on screen; see
 [early kernel messages](configuration.md#early-kernel-messages).
 
 ### Resuming from hibernation

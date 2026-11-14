@@ -1,6 +1,7 @@
-use std::{fs, io};
+use std::{env, fs, io};
 
 use bootvine_screen::service_manager::ServiceManager;
+use clap::ValueEnum;
 
 use crate::console_session::{
     console_takeover::{KERNEL_PRINTK, bring_own_terminal_forward, console_level},
@@ -10,6 +11,14 @@ use crate::console_session::{
 };
 
 const SAVED_KERNEL_CONSOLE_LEVEL: &str = "/run/bootvine/kernel-console-level";
+const SERVICE_RESULT_VARIABLE: &str = "SERVICE_RESULT";
+const CLEAN_SERVICE_RESULT: &str = "success";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum StatusOutputRestore {
+    Always,
+    UnlessCleanExit,
+}
 
 pub fn save_console_state() -> Result<(), RunError> {
     fs::create_dir_all(RESUME_CONSOLE_DIRECTORY)?;
@@ -29,11 +38,16 @@ pub fn take_shutdown_console() -> Result<(), RunError> {
     Ok(())
 }
 
-pub fn restore_console_state() -> Result<(), RunError> {
+pub fn restore_console_state(status_output_restore: StatusOutputRestore) -> Result<(), RunError> {
     fs::write(
         KERNEL_PRINTK,
         fs::read_to_string(SAVED_KERNEL_CONSOLE_LEVEL)?,
     )?;
+    let clean_exit =
+        env::var(SERVICE_RESULT_VARIABLE).is_ok_and(|result| result == CLEAN_SERVICE_RESULT);
+    if status_output_restore == StatusOutputRestore::UnlessCleanExit && clean_exit {
+        return Ok(());
+    }
     match DetectedManager::running()? {
         #[cfg(feature = "systemd")]
         DetectedManager::Systemd(service_manager) => service_manager.restore_status_output()?,

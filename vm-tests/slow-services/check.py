@@ -61,7 +61,7 @@ assert "handing the console over" in journal, "never handed the console over"
 machine.succeed('test "$(systemctl show -p Result --value bootvine)" = success')
 assert console_level() != "1", f"kernel console level was not restored: {console_level()}"
 show_status = machine.succeed("systemctl show -p ShowStatus --value").strip()
-assert show_status == "yes", f"systemd status output was not restored: {show_status}"
+assert show_status == "no", f"systemd status output came back before the shutdown: {show_status}"
 assert_unit_start_stays_off_console("Post boot status probe")
 
 machine.wait_until_tty_matches("1", "Username:")

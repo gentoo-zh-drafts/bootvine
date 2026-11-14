@@ -6,7 +6,9 @@ use bootvine::{
     config_reading::{ConfigError, read_config_file},
     console_session::{
         resume_console::{close_resume_console, open_resume_console},
-        saved_console_state::{restore_console_state, save_console_state, take_shutdown_console},
+        saved_console_state::{
+            StatusOutputRestore, restore_console_state, save_console_state, take_shutdown_console,
+        },
         watch_loop::{Settings, run},
     },
     system_install::install_files::{
@@ -99,7 +101,20 @@ enum Command {
         about = "Restore the kernel console level and systemd's status output however the viewer \
                  ended; run as ExecStopPost of the bootvine units"
     )]
-    RestoreConsoleState,
+    RestoreConsoleState(RestoreConsoleOptions),
+}
+
+#[derive(Args)]
+struct RestoreConsoleOptions {
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = StatusOutputRestore::Always,
+        help = "When to restore systemd's status output: always, or unless the unit exited \
+                cleanly (SERVICE_RESULT=success), which leaves it silenced for \
+                bootvine-shutdown.service to restore"
+    )]
+    status_output: StatusOutputRestore,
 }
 
 #[derive(Args)]
@@ -137,7 +152,9 @@ fn main() -> ExitCode {
         Some(Command::CloseResumeConsole) => report_outcome(close_resume_console()),
         Some(Command::SaveConsoleState) => report_outcome(save_console_state()),
         Some(Command::TakeShutdownConsole) => report_outcome(take_shutdown_console()),
-        Some(Command::RestoreConsoleState) => report_outcome(restore_console_state()),
+        Some(Command::RestoreConsoleState(options)) => {
+            report_outcome(restore_console_state(options.status_output))
+        }
         None => watch_boot(cli.watch),
     }
 }

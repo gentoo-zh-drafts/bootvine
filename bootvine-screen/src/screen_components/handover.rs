@@ -43,7 +43,7 @@ pub enum ShellStart {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatusRelease {
-    AfterBoot,
+    AtShutdown,
     Immediately,
 }
 
