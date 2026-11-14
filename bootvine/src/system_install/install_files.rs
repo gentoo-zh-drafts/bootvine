@@ -208,8 +208,17 @@ fn running_binary() -> Result<PathBuf, InstallError> {
 fn binary_file(target: &InstallTarget) -> Result<Option<InstalledFile>, InstallError> {
     let running = running_binary()?;
     let destination = PathBuf::from(target.binary_path());
-    if fs::canonicalize(target.staged(&destination)).is_ok_and(|resolved| resolved == running) {
-        return Ok(None);
+    let staged_destination = target.staged(&destination);
+    match fs::canonicalize(&staged_destination) {
+        Ok(resolved) if resolved == running => return Ok(None),
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(InstallError::File {
+                path: staged_destination,
+                source: error,
+            });
+        }
     }
     let contents = fs::read(&running).map_err(|source| InstallError::File {
         path: running,
@@ -410,16 +419,31 @@ pub fn uninstall_files(options: &UninstallOptions) -> Result<(), InstallError> {
         .every_installed_path()
         .into_iter()
         .try_for_each(|path| remove_if_present(target.staged(&path)))?;
-    let _ = fs::remove_dir(target.staged(&target.unit_path(RESUME_DROP_IN_DIR)));
+    let resume_drop_in_dir = target.staged(&target.unit_path(RESUME_DROP_IN_DIR));
+    match fs::remove_dir(&resume_drop_in_dir) {
+        Ok(()) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::NotFound | ErrorKind::DirectoryNotEmpty
+            ) => {}
+        Err(error) => {
+            return Err(InstallError::File {
+                path: resume_drop_in_dir,
+                source: error,
+            });
+        }
+    }
     let dracut_module_dir = target.staged(Path::new(DRACUT_MODULE_DIR));
     match fs::remove_dir(&dracut_module_dir) {
-        Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
             return Err(InstallError::File {
                 path: dracut_module_dir,
                 source: error,
             });
         }
-        _ => {}
     }
     if target.changes_live_system() {
         if target.installed_manager() == InstalledManager::Systemd {

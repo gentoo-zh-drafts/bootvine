@@ -20,7 +20,7 @@ use futures::{
     stream::FuturesUnordered,
 };
 use tokio::time::sleep;
-use tracing::info;
+use tracing::{debug, info, warn};
 use zbus::OwnedObjectPath;
 
 use crate::{
@@ -177,7 +177,10 @@ impl BusFeed {
                         changes.extend(self.tracker.finished_journal_reads());
                         connected_inputs(changes)
                     }
-                    Err(_) => self.lose_connection(),
+                    Err(error) => {
+                        warn!(error = %error, "lost the connection to systemd");
+                        self.lose_connection()
+                    }
                 })
             }
         }
@@ -199,13 +202,14 @@ impl BusFeed {
     async fn connect(&mut self, deadline: Instant, attempt: ConnectAttempt) -> Vec<FeedBatch> {
         match self.open_watched(attempt).await {
             Ok(changes) => vec![Ok(changes)],
-            Err(_) if Instant::now() < deadline => {
+            Err(error) if Instant::now() < deadline => {
+                debug!(error = %error, "systemd is not reachable yet, trying again");
                 sleep(BACKGROUND_CHECK_INTERVAL).await;
                 Vec::new()
             }
-            Err(_) => {
+            Err(error) => {
                 self.link = Link::Finished;
-                vec![Err(LinkFailure::ManagerUnreachable.into())]
+                vec![Err(LinkFailure::ManagerUnreachable(Box::new(error)).into())]
             }
         }
     }

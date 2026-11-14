@@ -147,10 +147,12 @@ pub(crate) fn console_prompt() -> ConsolePrompt {
 }
 
 fn request_files() -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = fs::read_dir(REQUESTS)
-        .into_iter()
-        .flatten()
-        .flatten()
+    let entries = match fs::read_dir(REQUESTS) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        listing => listing.expect("the password request directory of systemd is readable"),
+    };
+    let mut files: Vec<PathBuf> = entries
+        .map(|entry| entry.expect("the entries of the password request directory are readable"))
         .filter(|entry| {
             entry
                 .file_name()

@@ -100,10 +100,12 @@ pub(crate) struct ListedService {
 }
 
 fn entry_names(directory: &Path) -> Vec<String> {
-    fs::read_dir(directory)
-        .into_iter()
-        .flatten()
-        .flatten()
+    let entries = match fs::read_dir(directory) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        listing => listing.expect("OpenRC's state and runlevel directories are readable"),
+    };
+    entries
+        .map(|entry| entry.expect("the entries of OpenRC's directories are readable"))
         .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
         .collect()
 }
@@ -117,9 +119,15 @@ fn listed_services(run_root: &Path) -> impl Iterator<Item = ListedService> {
 }
 
 fn read_runlevel(run_root: &Path) -> Runlevel {
-    fs::read_to_string(run_root.join(SOFTLEVEL_FILE)).map_or(Runlevel::Unset, |text| {
-        Runlevel::Named(text.trim().to_owned())
-    })
+    match fs::read_to_string(run_root.join(SOFTLEVEL_FILE)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Runlevel::Unset,
+        softlevel => Runlevel::Named(
+            softlevel
+                .expect("OpenRC's softlevel file is readable")
+                .trim()
+                .to_owned(),
+        ),
+    }
 }
 
 fn read_change(run_root: &Path) -> RunlevelChange {

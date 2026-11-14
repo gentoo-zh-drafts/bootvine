@@ -221,7 +221,10 @@ async fn termination_request(listener: io::Result<OsSignal>) {
         Ok(mut listener) => {
             listener.recv().await;
         }
-        Err(_) => pending().await,
+        Err(error) => {
+            warn!(error = %error, "could not listen for SIGTERM, waiting for the boot only");
+            pending::<()>().await;
+        }
     }
 }
 

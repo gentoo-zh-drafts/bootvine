@@ -7,6 +7,6 @@ pub(crate) fn monotonic_now() -> Duration {
     let now = clock_gettime(ClockId::Monotonic);
     Duration::new(
         now.tv_sec.cast_unsigned(),
-        u32::try_from(now.tv_nsec).unwrap_or_default(),
+        u32::try_from(now.tv_nsec).expect("clock_gettime keeps nanoseconds below one second"),
     )
 }

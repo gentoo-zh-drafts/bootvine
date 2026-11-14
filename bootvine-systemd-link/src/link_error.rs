@@ -19,8 +19,8 @@ pub(crate) enum LinkFailure {
     Console(#[from] io::Error),
     #[error("entering the new root: {0}")]
     RootSwitch(#[from] Errno),
-    #[error("the service manager did not come back")]
-    ManagerUnreachable,
+    #[error("the service manager did not come back: {0}")]
+    ManagerUnreachable(Box<LinkFailure>),
 }
 
 #[derive(Debug, thiserror::Error)]

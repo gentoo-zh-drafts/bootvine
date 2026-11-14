@@ -101,7 +101,10 @@ fn restore_bootvine_terminal() -> io::Result<()> {
 pub fn open_resume_console() -> io::Result<()> {
     let printk_levels = fs::read_to_string(KERNEL_PRINTK)?;
     let previous_level = printk_levels.split_whitespace().next().unwrap_or_default();
-    let previous_timestamps = fs::read_to_string(KERNEL_TIMESTAMPS).unwrap_or_default();
+    let previous_timestamps = match fs::read_to_string(KERNEL_TIMESTAMPS) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        read_timestamps => read_timestamps?,
+    };
     let marker = Path::new(RESUME_CONSOLE_MARKER);
     if let Some(directory) = marker.parent() {
         fs::create_dir_all(directory)?;
@@ -111,7 +114,9 @@ pub fn open_resume_console() -> io::Result<()> {
         format!("{previous_level}\n{}\n", previous_timestamps.trim()),
     )?;
     thread::sleep(FRAME_INTERVAL * FRAMES_TO_SETTLE);
-    let _ = fs::write(KERNEL_TIMESTAMPS, TIMESTAMPS_HIDDEN);
+    if !previous_timestamps.is_empty() {
+        fs::write(KERNEL_TIMESTAMPS, TIMESTAMPS_HIDDEN)?;
+    }
     fs::write(KERNEL_PRINTK, KERNEL_INFO_VISIBLE)?;
     draw_progress_band()
 }
@@ -123,12 +128,16 @@ pub fn close_resume_console() -> io::Result<()> {
     let previous_level = recorded_lines.next().unwrap_or_default();
     let previous_timestamps = recorded_lines.next().unwrap_or_default();
     let terminal_restored = restore_bootvine_terminal();
-    if !previous_timestamps.is_empty() {
-        let _ = fs::write(KERNEL_TIMESTAMPS, previous_timestamps);
-    }
+    let timestamps_restored = if previous_timestamps.is_empty() {
+        Ok(())
+    } else {
+        fs::write(KERNEL_TIMESTAMPS, previous_timestamps)
+    };
     let level_restored = fs::write(KERNEL_PRINTK, previous_level);
     fs::remove_file(marker)?;
-    terminal_restored.and(level_restored)
+    terminal_restored
+        .and(timestamps_restored)
+        .and(level_restored)
 }
 
 #[cfg(test)]
