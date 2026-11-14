@@ -49,6 +49,7 @@
               craneLib
               rustToolchain
               ;
+            bootvine = pkgs.callPackage ./nix/package.nix { };
             builds = import ./nix/crane-builds.nix {
               inherit
                 lib
@@ -67,10 +68,16 @@
     in
     {
       packages = forEachSystem (
-        { pkgs, builds, ... }:
         {
-          default = builds.bootvine;
-          inherit (builds) bootvine scripted-demos repo-tasks;
+          pkgs,
+          builds,
+          bootvine,
+          ...
+        }:
+        {
+          default = bootvine;
+          inherit bootvine;
+          inherit (builds) scripted-demos repo-tasks;
           workspace-dependencies = builds.cargoArtifacts;
           sample-unit-files = pkgs.callPackage ./vm-tests/slow-services/sample-unit-files.nix {
             inherit (vmTests) sampleUnits;
@@ -78,9 +85,11 @@
         }
       );
 
+      overlays.default = import ./nix/overlay.nix;
+
       nixosModules = {
         default = self.nixosModules.bootvine;
-        bootvine = import ./nix/nixos-module.nix { inherit self; };
+        bootvine = ./nix/nixos-module.nix;
       };
 
       nixosConfigurations = lib.mapAttrs' (
@@ -93,6 +102,7 @@
           pkgs,
           system,
           builds,
+          bootvine,
           rustToolchain,
           ...
         }:
@@ -143,7 +153,7 @@
             releaseWrapperArgs = [
               "--set"
               "PKG_CONFIG_PATH"
-              (lib.makeSearchPathOutput "dev" "lib/pkgconfig" builds.bootvine.buildInputs)
+              (lib.makeSearchPathOutput "dev" "lib/pkgconfig" bootvine.buildInputs)
             ];
           };
         in
@@ -177,11 +187,12 @@
           system,
           pkgs,
           builds,
+          bootvine,
           ...
         }:
         {
           inherit (builds) clippy-lints;
-          bootvine-build = builds.bootvine;
+          bootvine-build = bootvine;
           repo-tasks-build = builds.repo-tasks;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
@@ -199,12 +210,12 @@
         {
           pkgs,
           craneLib,
-          builds,
+          bootvine,
           ...
         }:
         {
           default = craneLib.devShell {
-            inputsFrom = [ builds.bootvine ];
+            inputsFrom = [ bootvine ];
             packages = [
               pkgs.prek
               pkgs.convco

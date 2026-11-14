@@ -1,4 +1,3 @@
-{ self }:
 {
   config,
   lib,
@@ -29,8 +28,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-      defaultText = lib.literalExpression "bootvine.packages.\${system}.default";
+      default = pkgs.callPackage ./package.nix { };
+      defaultText = lib.literalExpression "pkgs.callPackage <bootvine/nix/package.nix> { }";
       description = "The bootvine package, which ships the systemd unit.";
     };
 

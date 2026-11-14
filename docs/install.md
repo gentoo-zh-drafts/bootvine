@@ -43,6 +43,26 @@ as well, the initrd has to run systemd.
    sudo nixos-rebuild switch --flake .#my-host
    ```
 
+### Without flakes
+
+Import the module from a tarball, or from a source pinned with
+[npins](https://github.com/andir/npins) or [niv](https://github.com/nmattia/niv).
+It builds bootvine with your system's nixpkgs:
+
+```nix
+{
+  imports = [
+    "${fetchTarball "https://codeberg.org/wvhulle/bootvine/archive/main.tar.gz"}/nix/nixos-module.nix"
+  ];
+
+  services.bootvine.enable = true;
+}
+```
+
+Then run `sudo nixos-rebuild switch`. The repository's `default.nix` also
+exposes `bootvine`, `overlay` and `nixosModule`; the flake exports the same
+overlay as `overlays.default`.
+
 ## Ubuntu
 
 1. Install the build dependencies and Rust:

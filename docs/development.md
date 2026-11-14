@@ -11,7 +11,7 @@
 | `scripted-demos/` | the scripted boot, shutdown and passphrase demos, and the VHS tapes that record them |
 | `xtask/` | repository tasks run with `cargo xtask` |
 | `vm-tests/` | the sample NixOS machines, one folder each with its VM check, and `alpine-openrc/`, which boots Alpine with a static OpenRC build |
-| `nix/` | the crane builds and the NixOS module |
+| `nix/` | the package, its overlay, the crane builds for CI and the NixOS module |
 | `recordings/` | ignored output of `record-screencasts`: the scripted demo GIFs and the sample machine WebP recordings, published on the `recordings` branch for the README and the [guide](guide.md) |
 
 `cargo build` and `cargo test` act on every crate. `bootvine` builds the
