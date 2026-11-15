@@ -63,6 +63,22 @@ Then run `sudo nixos-rebuild switch`. The repository's `default.nix` also
 exposes `bootvine`, `overlay` and `nixosModule`; the flake exports the same
 overlay as `overlays.default`.
 
+## Arch Linux
+
+Install the package
+[`bootvine`](https://archlinux.org/packages/extra/x86_64/bootvine/) from the
+official repos:
+
+```sh
+sudo pacman -S bootvine
+```
+
+Then enable it with:
+
+```sh
+sudo systemctl enable bootvine
+```
+
 ## From source
 
 This works the same on every distribution with systemd: building needs only
