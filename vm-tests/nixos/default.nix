@@ -16,6 +16,7 @@ let
     failed-unlock = "a LUKS volume the initrd needs, dropping to emergency mode after a wrong passphrase";
     failures = "units that fail in every way systemd reports, each with journal messages";
     hibernate-resume = "a swap disk to hibernate to, showing the kernel's image loading progress on resume";
+    plasma-session = "the slow units behind SDDM, logging in to a Plasma Wayland session";
   };
 
   machines = lib.mapAttrs (machineName: _: machineModule machineName) machineDescriptions;
