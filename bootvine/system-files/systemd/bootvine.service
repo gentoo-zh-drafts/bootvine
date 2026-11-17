@@ -2,8 +2,11 @@
 Description=Live dependency tree of boot jobs
 DefaultDependencies=no
 IgnoreOnIsolate=yes
+After=dracut-cmdline-ask.service breakpoint-pre-udev.service breakpoint-pre-basic.service
+After=breakpoint-pre-mount.service breakpoint-pre-switch-root.service
 Before=display-manager.service shutdown.target emergency.service rescue.service
-Conflicts=shutdown.target emergency.service rescue.service
+Before=dracut-emergency.service
+Conflicts=shutdown.target emergency.service rescue.service dracut-emergency.service
 
 [Service]
 Type=simple
