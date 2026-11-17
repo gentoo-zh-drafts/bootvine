@@ -198,6 +198,10 @@
             inherit lib pkgs;
             staticBootvine = builds.bootvine-static;
           };
+          vm-fedora-dracut = import ./vm-tests/fedora-dracut/check.nix {
+            inherit lib pkgs;
+            staticBootvine = builds.bootvine-static;
+          };
         }
         // lib.mapAttrs' (machineName: check: lib.nameValuePair "vm-${machineName}" check) (
           vmTests.checksFor pkgs

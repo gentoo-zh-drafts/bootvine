@@ -10,7 +10,7 @@
 | `bootvine-openrc-link/` | `OpenrcLink`, the OpenRC side: service states under `/run/openrc`, the dependency cache and vocabulary |
 | `scripted-demos/` | the scripted boot, shutdown and passphrase demos, and the VHS tapes that record them |
 | `xtask/` | repository tasks run with `cargo xtask` |
-| `vm-tests/` | the sample NixOS machines, one folder each with its VM check, and `alpine-openrc/`, which boots Alpine with a static OpenRC build |
+| `vm-tests/` | the sample NixOS machines, one folder each with its VM check; `alpine-openrc/`, which boots Alpine with OpenRC; and `fedora-dracut/`, which installs bootvine on Fedora Cloud and boots its hostonly dracut initramfs |
 | `nix/` | the builds and the NixOS module: `crane-builds.nix` builds every flake output with crane, so `nixos-rebuild` and CI reuse the dependencies in `bootvine-dependencies`; `package.nix` builds the same package with `buildRustPackage` for `default.nix`, without crane; both take the source, metadata and installed unit files from `bootvine-package-parts.nix`; `bootvine-static` is a static musl build for the VM checks of distributions without Nix |
 | `recordings/` | ignored output of `record-screencasts`: the scripted demo GIFs and the sample machine WebP recordings, published on the `recordings` branch for the README and the [guide](guide.md) |
 
