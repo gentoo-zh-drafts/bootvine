@@ -1,6 +1,6 @@
 { self, lib, ... }:
 let
-  sampleMachines = import ../vm-tests {
+  sampleMachines = import ../vm-tests/nixos {
     inherit lib;
     bootvineModule = self.nixosModules.bootvine;
   };
@@ -16,7 +16,7 @@ in
   perSystem =
     { pkgs, system, ... }:
     {
-      packages.sample-unit-files = pkgs.callPackage ../vm-tests/slow-services/sample-unit-files.nix {
+      packages.sample-unit-files = pkgs.callPackage ../vm-tests/nixos/slow-services/sample-unit-files.nix {
         inherit (sampleMachines) sampleUnits;
       };
 

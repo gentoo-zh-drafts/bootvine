@@ -8,7 +8,7 @@
 | `bootvine-screen/` | the screen as data and pure functions |
 | `bootvine-systemd-link/`, `bootvine-openrc-link/` | the systemd and OpenRC sides |
 | `scripted-demos/` | the scripted demos and the VHS tapes that record them |
-| `vm-tests/` | the VM checks: one folder per sample NixOS machine, plus `alpine-openrc/` and `fedora-dracut/` for distributions without Nix |
+| `vm-tests/` | the VM checks, one folder per operating system: `nixos/` with a folder per sample machine, `alpine/` and `fedora/` |
 | `tasks/` | repository tasks, run with `nix run .#<task>` |
 | `flake-modules/` | the flake, one [flake-parts](https://flake.parts) module per feature; every file here is loaded |
 | `nix/` | the package, the NixOS module and the builds the flake modules and `default.nix` share |
@@ -74,12 +74,12 @@ clash with [QEMU](https://www.qemu.org).
 
 ### Adding a NixOS VM check
 
-1. Copy a folder under `vm-tests/`, such as `text-console/`: `machine.nix`
+1. Copy a folder under `vm-tests/nixos/`, such as `text-console/`: `machine.nix`
    describes the machine, `check.nix` adapts it for the test, `check.py` is
    the test script.
-2. Add its name and a one-line description to `vm-tests/default.nix`. That
+2. Add its name and a one-line description to `vm-tests/nixos/default.nix`. That
    creates the check `vm-<name>` and the app `sample-vm-<name>`.
-3. Write `check.py` with the helpers in `vm-tests/shared/console.py`:
+3. Write `check.py` with the helpers in `vm-tests/nixos/shared/console.py`:
    `wait_for_screen("Initrd", "unit")` waits for text on bootvine's screen,
    `assert_bootvine_in_front()` checks the console, `bootvine_journal()` and
    `wait_for_bootvine_message()` read the journal.
@@ -91,7 +91,7 @@ clash with [QEMU](https://www.qemu.org).
 
 ### Checks on other distributions
 
-`alpine-openrc/` and `fedora-dracut/` boot a distribution image in QEMU and read
+`vm-tests/alpine/` and `vm-tests/fedora/` boot a distribution image in QEMU and read
 a report from the serial console. They use `bootvine-static`, since those images
 have no Nix store. To update one, change the release and hash of the image at
 the top of its `check.nix`; `nix build` prints the new hash after a mismatch.

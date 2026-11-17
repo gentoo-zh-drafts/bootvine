@@ -229,5 +229,5 @@ shows the shutdown.
 | `nix run .#sample-vm-failures` | a firmware failure in the initrd, then units that exit with an error, crash, time out, cannot be run, restart too often, report a status, die after starting, and one that fails only through its dependency | [failures](#failures) |
 
 Each machine keeps its disk in `~/.cache/bootvine-<machine>.qcow2`; delete it
-to start fresh. The machines live in `vm-tests/`, one folder each, next to the
+to start fresh. The machines live in `vm-tests/nixos/`, one folder each, next to the
 check that drives and records it.
