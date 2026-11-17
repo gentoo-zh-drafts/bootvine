@@ -11,16 +11,21 @@ use bootvine::{
         },
         watch_loop::{Settings, run},
     },
-    system_install::install_files::{
-        InstallOptions, UninstallOptions, install_files, uninstall_files,
+    system_install::{
+        install_files::{InstallOptions, UninstallOptions, install_files, uninstall_files},
+        install_health::{OverallHealth, report_health},
     },
 };
 use bootvine_screen::{
     boot_model::{RootRequest, RunRequest, Scope},
     screen_settings::config_file::{Config, Timing, default_config_table},
 };
+#[cfg(feature = "systemd")]
+use bootvine_systemd_link::STARTING_MESSAGE;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use jiff::fmt::friendly::SpanParser;
+#[cfg(feature = "systemd")]
+use tracing::info;
 use tracing::warn;
 use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -79,6 +84,11 @@ enum Command {
     Install(InstallOptions),
     #[command(about = "Disable and remove what install put in place")]
     Uninstall(UninstallOptions),
+    #[command(
+        about = "Check that the units, the config, the initramfs and this boot's run of bootvine \
+                 are in order, with a fix for each problem"
+    )]
+    Health,
     #[command(
         about = "Let the kernel's image loading progress reach the console; started before \
                  systemd-hibernate-resume.service"
@@ -148,6 +158,11 @@ fn main() -> ExitCode {
         ),
         Some(Command::Install(options)) => report_outcome(install_files(&options)),
         Some(Command::Uninstall(options)) => report_outcome(uninstall_files(&options)),
+        Some(Command::Health) => match report_health() {
+            Ok(OverallHealth::Healthy) => ExitCode::SUCCESS,
+            Ok(OverallHealth::Unhealthy) => ExitCode::FAILURE,
+            Err(error) => report_outcome(Err(error)),
+        },
         Some(Command::OpenResumeConsole) => report_outcome(open_resume_console()),
         Some(Command::CloseResumeConsole) => report_outcome(close_resume_console()),
         Some(Command::SaveConsoleState) => report_outcome(save_console_state()),
@@ -185,6 +200,8 @@ fn watch_boot(options: WatchOptions) -> ExitCode {
             .init(),
         Err(error) => eprintln!("bootvine: cannot log to the journal: {error}"),
     }
+    #[cfg(feature = "systemd")]
+    info!(version = env!("CARGO_PKG_VERSION"), "{STARTING_MESSAGE}");
     let config = match read_config_file(&options.config) {
         Ok(config) => config,
         Err(ConfigError::Unreadable(error)) if error.kind() == ErrorKind::NotFound => {

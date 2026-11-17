@@ -26,7 +26,7 @@ const ENTRIES_SCANNED: usize = 200;
 const JOURNAL_WAKE_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, thiserror::Error)]
-enum JournalReadError {
+pub enum JournalReadError {
     #[error("reading the boot id: {0}")]
     BootId(#[from] io::Error),
     #[error("reading the journal: {0}")]
@@ -68,7 +68,7 @@ fn read_settled_messages(
     wanted: usize,
     deadline: Instant,
 ) -> Result<Vec<String>, JournalReadError> {
-    let boot_id = fs::read_to_string(BOOT_ID_PATH)?.trim().replace('-', "");
+    let boot_id = current_boot_id()?;
     let mut live_journal = woken_journal()?;
     let mut unit_filter = live_journal.filter();
     UNIT_FIELDS.iter().for_each(|field| {
@@ -90,6 +90,10 @@ fn read_settled_messages(
             JournalGrowth::DeadlinePassed => return Ok(unit_messages.oldest_first),
         }
     }
+}
+
+pub(crate) fn current_boot_id() -> Result<String, JournalReadError> {
+    Ok(fs::read_to_string(BOOT_ID_PATH)?.trim().replace('-', ""))
 }
 
 fn woken_journal() -> Result<LiveJournal, SdJournalError> {

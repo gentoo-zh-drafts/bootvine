@@ -24,6 +24,7 @@ use tracing::{debug, info, warn};
 use zbus::OwnedObjectPath;
 
 use crate::{
+    bootvine_runs::WATCHING_MESSAGE,
     descriptor_streams::{BACKGROUND_CHECK_INTERVAL, CarriedItem, unfold_carrying},
     journal_tail::settled_unit_messages,
     link_error::LinkFailure,
@@ -403,7 +404,7 @@ impl BootTracker {
             phase = self.phase.label(),
             pid = process::id(),
             transport = %connection.transport(),
-            "watching the boot",
+            "{WATCHING_MESSAGE}",
         );
         let queued_at = monotonic_now();
         Ok(boot_progress

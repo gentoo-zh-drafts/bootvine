@@ -14,17 +14,17 @@ use rustix::process::geteuid;
 
 use crate::system_install::install_error::InstallError;
 
-const DRACUT_MODULE_DIR: &str = "/usr/lib/dracut/modules.d/90bootvine";
+pub(super) const DRACUT_MODULE_DIR: &str = "/usr/lib/dracut/modules.d/90bootvine";
 const DRACUT_CONF: &str = "/etc/dracut.conf.d/bootvine.conf";
-const MKINITCPIO_HOOK: &str = "/usr/lib/initcpio/install/sd-bootvine";
-const PACKAGED_BINARY_PATH: &str = "/usr/bin/bootvine";
+pub(super) const MKINITCPIO_HOOK: &str = "/usr/lib/initcpio/install/sd-bootvine";
+pub(super) const PACKAGED_BINARY_PATH: &str = "/usr/bin/bootvine";
 
-struct PackagedUnit {
-    name: &'static str,
-    contents: &'static str,
+pub(super) struct PackagedUnit {
+    pub(super) name: &'static str,
+    pub(super) contents: &'static str,
 }
 
-const PACKAGED_UNITS: [PackagedUnit; 2] = [
+pub(super) const PACKAGED_UNITS: [PackagedUnit; 2] = [
     PackagedUnit {
         name: "bootvine.service",
         contents: include_str!("../../system-files/systemd/bootvine.service"),
@@ -47,12 +47,12 @@ const MKINITCPIO_INSTALL_HOOK: &str =
     include_str!("../../system-files/mkinitcpio/install/sd-bootvine");
 const INITRD_GENERATORS: [InitrdGenerator; 2] =
     [InitrdGenerator::Dracut, InitrdGenerator::Mkinitcpio];
-const OPENRC_SCRIPT: PackagedUnit = PackagedUnit {
+pub(super) const OPENRC_SCRIPT: PackagedUnit = PackagedUnit {
     name: "/etc/init.d/bootvine",
     contents: include_str!("../../system-files/openrc/bootvine"),
 };
-const OPENRC_SERVICE: &str = "bootvine";
-const OPENRC_RUNLEVEL: &str = "sysinit";
+pub(super) const OPENRC_SERVICE: &str = "bootvine";
+pub(super) const OPENRC_RUNLEVEL: &str = "sysinit";
 const OPENRC_RUNLEVEL_FILE: &str = "/run/openrc/softlevel";
 
 #[derive(Args)]
@@ -85,7 +85,7 @@ pub enum ManagerChoice {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum InstalledManager {
+pub(super) enum InstalledManager {
     Systemd,
     Openrc,
 }
@@ -118,8 +118,16 @@ pub enum InitrdGenerator {
     Mkinitcpio,
 }
 
-struct InstalledFile {
-    destination: PathBuf,
+pub(super) fn running_manager() -> InstalledManager {
+    if Path::new(OPENRC_RUNLEVEL_FILE).is_file() {
+        InstalledManager::Openrc
+    } else {
+        InstalledManager::Systemd
+    }
+}
+
+pub(super) struct InstalledFile {
+    pub(super) destination: PathBuf,
     contents: Vec<u8>,
     mode: u32,
 }
@@ -143,10 +151,8 @@ impl InstallTarget {
     fn installed_manager(&self) -> InstalledManager {
         match self.service_manager {
             ManagerChoice::Openrc => InstalledManager::Openrc,
-            ManagerChoice::Detect if Path::new(OPENRC_RUNLEVEL_FILE).is_file() => {
-                InstalledManager::Openrc
-            }
-            ManagerChoice::Systemd | ManagerChoice::Detect => InstalledManager::Systemd,
+            ManagerChoice::Systemd => InstalledManager::Systemd,
+            ManagerChoice::Detect => running_manager(),
         }
     }
 
@@ -264,7 +270,7 @@ fn service_files(target: &InstallTarget) -> Vec<InstalledFile> {
     }
 }
 
-fn initrd_hook_files(initrd: InitrdGenerator) -> Vec<InstalledFile> {
+pub(super) fn initrd_hook_files(initrd: InitrdGenerator) -> Vec<InstalledFile> {
     match initrd {
         InitrdGenerator::None => Vec::new(),
         InitrdGenerator::Dracut => vec![

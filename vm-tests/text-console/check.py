@@ -21,6 +21,7 @@ print(journal)
 assert "handing the console over" in journal, "never handed the console over"
 assert foreground_terminal() != f"tty{BOOTVINE_TERMINAL}", "bootvine kept the console without a display manager"
 machine.wait_until_tty_matches("1", "login: ")
+print(machine.succeed("bootvine health"))
 
 terminal_before_shutdown = foreground_terminal()
 wipe_terminal(terminal_before_shutdown)

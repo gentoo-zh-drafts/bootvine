@@ -5,7 +5,7 @@ mod reached_milestones;
 mod unit_facts;
 mod waiting_tree;
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, error::Error, fmt, str::FromStr, time::Duration};
 
 pub use self::{
     boot_change::BootChange,
@@ -53,6 +53,8 @@ pub enum ConsolePrompt {
 }
 
 impl Phase {
+    const ALL: [Self; 4] = [Self::Initrd, Self::Host, Self::User, Self::Shutdown];
+
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -61,6 +63,28 @@ impl Phase {
             Self::User => "User",
             Self::Shutdown => "Shutdown",
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownPhaseLabel(pub String);
+
+impl fmt::Display for UnknownPhaseLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "no phase is labelled {:?}", self.0)
+    }
+}
+
+impl Error for UnknownPhaseLabel {}
+
+impl FromStr for Phase {
+    type Err = UnknownPhaseLabel;
+
+    fn from_str(label: &str) -> Result<Self, UnknownPhaseLabel> {
+        Self::ALL
+            .into_iter()
+            .find(|phase| phase.label() == label)
+            .ok_or_else(|| UnknownPhaseLabel(label.to_owned()))
     }
 }
 
