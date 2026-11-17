@@ -48,7 +48,9 @@ lists the other sample machines and the scripted demos that play in a terminal.
   to the screen: the tree, the timeline, failures, shutdown and passphrase
   prompts.
 - [Install](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/install.md)
-  on NixOS, from source on any systemd distribution, and on OpenRC.
+  on NixOS, Arch Linux, from source on any systemd distribution, and on OpenRC.
+- [Packaging](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/packaging.md)
+  bootvine for a distribution.
 - [Configuration](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/configuration.md)
   of colours, timing and the console.
 - [Architecture](https://codeberg.org/wvhulle/bootvine/src/branch/main/docs/architecture.md):

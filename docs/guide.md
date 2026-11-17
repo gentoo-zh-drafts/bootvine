@@ -3,7 +3,7 @@
 What bootvine shows on the console, part by part, with the recordings that go
 with each. The GIFs come from the [scripted demos](#scripted-demos); the WebP
 animations are real boots of the [sample machines](#sample-machines), recorded
-by their [VM checks](development.md#testing).
+by their [VM checks](development.md#tests).
 
 ## systemd and OpenRC
 

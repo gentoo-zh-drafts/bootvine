@@ -1,45 +1,17 @@
 # Configuration
 
 Every setting has a default, so bootvine needs no configuration. To change
-some, write only those keys:
-
-- **On [NixOS](https://nixos.org)**, under `services.bootvine.settings`. The module writes them to
-  `/etc/bootvine.toml` in the real root and the initrd, and the rebuild fails
-  if `bootvine check` rejects them.
-
-  ```nix
-  services.bootvine.settings = {
-    colors.tree.running-marker = "light-yellow";
-    timing.keep-final-frame-for = "500ms";
-  };
-  ```
-
-- **On other distributions**, in `/etc/bootvine.toml`:
-
-  ```toml
-  [colors.tree]
-  running-marker = "light-yellow"
-
-  [timing]
-  keep-final-frame-for = "500ms"
-  ```
-
-  Then check the file and, if bootvine runs in your initrd, rebuild the
-  initramfs, since the [dracut](https://github.com/dracut-ng/dracut-ng) and
-  [mkinitcpio](https://wiki.archlinux.org/title/Mkinitcpio) hooks copy the file into it:
-
-  ```sh
-  bootvine check /etc/bootvine.toml
-  sudo dracut --force  # or: sudo mkinitcpio -P
-  ```
-
-  At boot, bootvine ignores an invalid file and uses the defaults.
+some, set only those keys, in `/etc/bootvine.toml` or, on NixOS, in
+`services.bootvine.settings`. Where they go and how they reach the initramfs
+is on the page for your system: [NixOS](install/nixos.md#configure),
+[Arch Linux](install/arch-linux.md#configure),
+[from source](install/from-source.md#configure) or
+[OpenRC](install/openrc.md#configure).
 
 ## Defaults
 
 `bootvine defaults` prints every key with its default as TOML, and
-`bootvine defaults --format nix` prints the same as a Nix attribute set to
-paste into `services.bootvine.settings`:
+`bootvine defaults --format nix` prints the same as a Nix attribute set:
 
 ```toml
 [colors.header]
@@ -127,9 +99,8 @@ Each `[colors.*]` table covers one part of the screen:
 | `password` | the passphrase popup |
 
 Values are the 16 console colour names, such as `yellow`, `light-yellow`,
-`gray` and `dark-gray`. To change how those 16 colours look, set the console
-palette instead: `console.colors` on NixOS, or the `vt.default_red`,
-`vt.default_grn` and `vt.default_blu` kernel parameters elsewhere.
+`gray` and `dark-gray`. How those 16 colours look is the console palette, set
+per system as described on its install page.
 
 ## Timing
 
@@ -143,12 +114,8 @@ palette instead: `console.colors` on NixOS, or the `vt.default_red`,
 ## Early kernel messages
 
 bootvine silences the kernel console while it runs, but kernel messages from
-before it starts still reach the screen. To keep those to errors, boot with the
-`quiet` kernel parameter, or on NixOS set:
-
-```nix
-boot.consoleLogLevel = 3;
-```
+before it starts still reach the screen. To keep those to errors, lower the
+console log level: the install page of your system shows how.
 
 ## Running it by hand
 
@@ -162,5 +129,5 @@ The units run bootvine with its defaults. Run by hand, it takes these options:
 | `--user` | Watch your user service manager instead of PID 1. |
 | `--shutdown` | Follow a shutdown instead of a boot. |
 
-[Development](development.md#testing) shows how to watch your user manager
+[Development](development.md#tests) shows how to watch your user manager
 start a set of sample units this way.
