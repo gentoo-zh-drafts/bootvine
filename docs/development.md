@@ -19,6 +19,16 @@
 `--no-default-features --features openrc` for OpenRC alone. `cargo run` needs the binary:
 `--bin bootvine`, `--bin scripted-boot` and so on.
 
+Each language is used only where it is the native one for the job:
+
+| Language | Used for |
+| --- | --- |
+| Rust | bootvine and any logic a user or a check needs, such as `bootvine health`; repository tasks in `xtask/` |
+| Nix | builds, checks and machine definitions; config files the checks need are generated with `builtins.toJSON` or `pkgs.writers` |
+| Python | the `testScript` of the NixOS VM checks, the test driver's language |
+| Nushell | CI and release tasks in `ci/` |
+| Shell | only where the host tool requires it: the dracut module, the mkinitcpio hook, the OpenRC init script, and the commands of a check that boots a distribution without Nix |
+
 ## Setup
 
 Work inside the dev shell (`direnv allow` once, with
