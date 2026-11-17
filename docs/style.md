@@ -23,3 +23,17 @@
 Clippy runs with the pedantic lints and forbids absolute paths; formatting
 needs the nightly toolchain the dev shell provides. See
 [Development](development.md#before-committing) for the commands.
+
+## Languages
+
+Each language only where it is the native one for the job:
+
+- Rust for bootvine, and for any logic a user or a check needs, such as
+  `bootvine health`.
+- Nix for builds, checks and machine definitions; config files are generated
+  from Nix values, not written by hand.
+- Python only for the test scripts of the NixOS VM checks.
+- Nushell for every repository task in `tasks/`; they need nothing compiled,
+  so CI can run them before the dependencies are built.
+- Shell only where the host tool requires it: the dracut module, the
+  mkinitcpio hook and the OpenRC init script.

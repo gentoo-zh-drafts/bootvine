@@ -4,30 +4,13 @@
 
 | Folder | Holds |
 | --- | --- |
-| `bootvine/` | the published crate: the live runtime, the console, the `bootvine` binary and the unit and initrd files it installs |
-| `bootvine-screen/` | the screen as data and pure functions: model, messages, commands, subscriptions, update and view, and the `ServiceManager` trait |
-| `bootvine-systemd-link/` | `SystemdLink`, the systemd side: job feed, journal, password agent and vocabulary |
-| `bootvine-openrc-link/` | `OpenrcLink`, the OpenRC side: service states under `/run/openrc`, the dependency cache and vocabulary |
-| `scripted-demos/` | the scripted boot, shutdown and passphrase demos, and the VHS tapes that record them |
-| `xtask/` | repository tasks run with `cargo xtask` |
-| `vm-tests/` | the sample NixOS machines, one folder each with its VM check; `alpine-openrc/`, which boots Alpine with OpenRC; and `fedora-dracut/`, which installs bootvine on Fedora Cloud and boots its hostonly dracut initramfs |
-| `nix/` | the builds and the NixOS module: `crane-builds.nix` builds every flake output with crane, so `nixos-rebuild` and CI reuse the dependencies in `bootvine-dependencies`; `package.nix` builds the same package with `buildRustPackage` for `default.nix`, without crane; both take the source, metadata and installed unit files from `bootvine-package-parts.nix`; `bootvine-static` is a static musl build for the VM checks of distributions without Nix |
-| `recordings/` | ignored output of `record-screencasts`: the scripted demo GIFs and the sample machine WebP recordings, published on the `recordings` branch for the README and the [guide](guide.md) |
-
-`cargo build` and `cargo test` act on every crate. `bootvine` builds the
-`systemd` link by default; add `--features openrc` for both, or
-`--no-default-features --features openrc` for OpenRC alone. `cargo run` needs the binary:
-`--bin bootvine`, `--bin scripted-boot` and so on.
-
-Each language is used only where it is the native one for the job:
-
-| Language | Used for |
-| --- | --- |
-| Rust | bootvine and any logic a user or a check needs, such as `bootvine health`; repository tasks in `xtask/` |
-| Nix | builds, checks and machine definitions; config files the checks need are generated with `builtins.toJSON` or `pkgs.writers` |
-| Python | the `testScript` of the NixOS VM checks, the test driver's language |
-| Nushell | CI and release tasks in `ci/` |
-| Shell | only where the host tool requires it: the dracut module, the mkinitcpio hook, the OpenRC init script, and the commands of a check that boots a distribution without Nix |
+| `bootvine/` | the published crate: the `bootvine` binary and the unit and initramfs files it installs |
+| `bootvine-screen/` | the screen as data and pure functions |
+| `bootvine-systemd-link/`, `bootvine-openrc-link/` | the systemd and OpenRC sides |
+| `scripted-demos/` | the scripted demos and the VHS tapes that record them |
+| `vm-tests/` | the VM checks: one folder per sample NixOS machine, plus `alpine-openrc/` and `fedora-dracut/` for distributions without Nix |
+| `tasks/` | repository tasks, run with `nix run .#<task>` |
+| `nix/` | the package, the NixOS module and the builds behind the flake |
 
 ## Setup
 
@@ -35,127 +18,100 @@ Work inside the dev shell (`direnv allow` once, with
 [direnv](https://direnv.net)). Version control is
 [jj](https://github.com/jj-vcs/jj), not the `git` CLI.
 
+`cargo build` and `cargo test` act on every crate. `bootvine` builds for
+systemd by default; add `--features openrc` for both, or
+`--no-default-features --features openrc` for OpenRC alone.
+
 ## Before committing
 
 ```sh
 cargo clippy --workspace --all-targets
 ast-grep scan --error
 cargo fmt --all
-```
-
-Clippy runs with the pedantic lints and forbids absolute paths; formatting
-needs the nightly toolchain the dev shell provides. `.clippy.toml` denies
-saturating and wrapping arithmetic, `Instant::elapsed` and lossy unicode
-conversions, and `ast-grep-rules/` holds structural rules with tests in
-`ast-grep-rule-tests/` (`ast-grep test`).
-
-The viewer logs to the journal; read it with `journalctl -t bootvine`, and
-narrow it with fields such as `UNIT=foo.service` or `-p warning`.
-
-Commit messages follow [Conventional Commits](https://www.conventionalcommits.org).
-jj does not run git hooks, so check the commits you are about to push with:
-
-```sh
 nix run .#check-commit-messages -- origin/main..HEAD
 ```
 
-Git users can install the same commit-message check and a formatting check as
-hooks, plus the ast-grep rules, with `prek install` ([prek](https://github.com/j178/prek), from the dev
-shell) or `pre-commit install` ([pre-commit](https://pre-commit.com)). CI runs
-the formatting and ast-grep hooks with `nix run .#run-pre-commit-hooks`.
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org).
+jj runs no git hooks; git users can install them with `prek install`.
+See the [code style](style.md) for the conventions these enforce.
 
-## Continuous integration
-
-`.woodpecker/checks.yaml` runs on Codeberg's
-[Woodpecker CI](https://woodpecker-ci.org) for every push and pull request: the bootvine build with its tests, the xtask build, clippy,
-the pre-commit hooks, an evaluation of every flake output, and the commit-message check on
-pull requests. The workspace dependencies (`bootvine-dependencies`) are built or fetched in a step of their own. Builds on `main` are pushed to the `wvhulle` [Cachix](https://www.cachix.org) cache, which
-`nixConfig` in `flake.nix` offers as a substituter. CI tasks are Nushell scripts in `ci/`, exposed as flake apps in `nix/ci-tasks.nix`.
-
-Checks are named by kind: `build-*` builds and tests, `lint-*` lints, and
-`vm-*` boots a machine. The `vm-*` checks need KVM, which Codeberg's runners
-lack, so they only run locally.
-
-## Releases
-
-`.woodpecker/publish-release-and-update-pr.yaml` runs
-[release-plz](https://release-plz.dev) after the checks pass on `main`. It
-keeps a pull request labelled `release` open on Codeberg that bumps the version
-in `Cargo.toml` and adds the new commits to `CHANGELOG.md`. Only `feat`, `fix`
-and `perf` commits open one; a `!` or a `BREAKING CHANGE` footer bumps the
-minor version while bootvine is below 1.0. Merging that pull request publishes
-the crate to crates.io, tags the merge `v<version>` and creates a Codeberg
-release with the changelog. Settings are in `release-plz.toml`.
-
-The pipeline needs two Woodpecker secrets: `bot_token`, an access token of the
-`wvhulle-bot` Codeberg account, which has write access to the repository, and
-`cargo_registry_token`, a crates.io token that may publish new crates and updates. Preview the next release
-locally from the dev shell with `release-plz update`.
-
-## Dependency updates
-
-The `weekly-dependency-update` cron runs `.woodpecker/dependency-update-pr.yaml`,
-which updates `Cargo.lock` and `flake.lock` and opens or updates one pull request
-from the `bot/dependency-updates` branch as `wvhulle-bot`. The checks on that pull
-request are the trial build. Commits pushed to the branch by hand stop further
-automatic updates until it is merged. Updates that need changes to `Cargo.toml`
-stay manual.
-
-## Testing
+## Tests
 
 | What | Command |
 | --- | --- |
-| Model and render tests | `cargo test --workspace` |
+| Unit tests | `cargo test --workspace` |
 | Scripted demos | `cargo run --bin scripted-boot` (also `scripted-shutdown`, `scripted-luks-unlock`) |
-| Sample machines in a window | `nix run .#sample-vm-<machine>`, see the [guide](guide.md#sample-machines) |
-| A sample machine's check | `nix build .#checks.x86_64-linux.vm-<machine>` |
+| A sample machine in a window | `nix run .#sample-vm-<machine>` |
+| One VM check | `nix build .#checks.x86_64-linux.vm-<machine>` |
+| Every check | `nix flake check` |
 
-To watch your own user manager start the sample units:
+The `vm-*` checks need KVM. Codeberg's CI has none, so run them locally before
+pushing a change to the console, the units or the initramfs hooks. Prefix VM
+commands with `env -u LD_LIBRARY_PATH` if your shell exports libraries that
+clash with [QEMU](https://www.qemu.org).
 
-```sh
-units=$(nix build --no-link --print-out-paths .#sample-unit-files)
-systemctl --user link --runtime $units/*
-systemctl --user start --no-block bootvine-sample-services.target
-cargo run --bin bootvine -- --user --target bootvine-sample-services.target --hold 3s
-systemctl --user stop $(ls $units)
-systemctl --user disable --runtime $(ls $units)
-```
+### Debugging a VM check
 
-Everything a sample machine needs sits in its own folder under `vm-tests/`:
-`machine.nix`, `check.nix` and `check.py`. `vm-tests/shared/` holds the
-settings every machine shares, the window setup for `nix run`, the console
-helpers for the checks and the screen recorder. A new machine is a new folder
-plus its name in `vm-tests/default.nix`.
+- A failed check leaves its log in `nix log <drv>`; the serial console and
+  bootvine's journal lines are in it.
+- Step through a NixOS check by hand:
+  `nix run .#checks.x86_64-linux.vm-<machine>.driverInteractive`, then call
+  `test_script()`.
+- The checks record the console: frames land in the check's output under
+  `recording/`.
+- To see bootvine on your own user manager without a VM, start the sample
+  units and watch them:
 
-The VM checks read the console as text, hold the boot at fixed points and wait
-on marker files instead of sleeping. The failures check starts each failing
-unit by hand, so it knows which one is newest in the panel. While a check runs,
-`ScreenRecording` takes a frame every half second through a second QEMU
-monitor socket, so it never competes with the driver's own monitor; the frames
-land in the check's output under `recording/`. To step through a check by hand, run
-`nix run .#checks.x86_64-linux.vm-slow-services.driverInteractive` and
-call `test_script()`.
+  ```sh
+  units=$(nix build --no-link --print-out-paths .#sample-unit-files)
+  systemctl --user link --runtime $units/*
+  systemctl --user start --no-block bootvine-sample-services.target
+  cargo run --bin bootvine -- --user --target bootvine-sample-services.target --hold 3s
+  systemctl --user stop $(ls $units)
+  systemctl --user disable --runtime $(ls $units)
+  ```
 
-Prefix VM and recording commands with `env -u LD_LIBRARY_PATH` when your shell
-exports libraries that clash with [QEMU](https://www.qemu.org) or Chromium.
+### Adding a NixOS VM check
+
+1. Copy a folder under `vm-tests/`, such as `text-console/`: `machine.nix`
+   describes the machine, `check.nix` adapts it for the test, `check.py` is
+   the test script.
+2. Add its name and a one-line description to `vm-tests/default.nix`. That
+   creates the check `vm-<name>` and the app `sample-vm-<name>`.
+3. Write `check.py` with the helpers in `vm-tests/shared/console.py`:
+   `wait_for_screen("Initrd", "unit")` waits for text on bootvine's screen,
+   `assert_bootvine_in_front()` checks the console, `bootvine_journal()` and
+   `wait_for_bootvine_message()` read the journal.
+4. Wait on marker files or screen text, never on `sleep`. Hold a unit at a
+   fixed point with an `ExecStart` that waits for a file under `/run`, and
+   release it with `machine.succeed("touch /run/<file>")`.
+5. End with `bootvine health` where it applies: it fails the check if the
+   units, the initramfs or this boot's run are off.
+
+### Checks on other distributions
+
+`alpine-openrc/` and `fedora-dracut/` boot a distribution image in QEMU and read
+a report from the serial console. They use `bootvine-static`, since those images
+have no Nix store. To update one, change the release and hash of the image at
+the top of its `check.nix`; `nix build` prints the new hash after a mismatch.
 
 ## Repository tasks
 
-- `nix run .#record-screencasts` re-records the animations from the scripted
-  demos and turns the frames each VM check captured into
-  `recordings/<machine>.webp`, for the README and the [guide](guide.md).
-- `nix run .#publish-recordings` force-pushes `recordings/` as the single,
-  parentless commit of the `recordings` branch, which the README and the guide
-  link to. Keeping the recordings off `main` keeps them out of every clone and
-  flake fetch.
-- `cargo xtask sync-default-config` rewrites the defaults block in
-  [configuration](configuration.md#defaults) from `bootvine defaults`.
-- `cargo run --bin bootvine -- install --destdir <dir> --initrd dracut` stages an install
-  without touching the system; `cargo run --bin bootvine -- uninstall --destdir <dir>` removes
-  it again.
+| Task | Does |
+| --- | --- |
+| `nix run .#record-screencasts` | re-records the demo animations and the VM check recordings into `recordings/` |
+| `nix run .#publish-recordings` | force-pushes `recordings/` to the `recordings` branch, which the README and the guide link to |
+| `nix run .#sync-default-config` | rewrites the defaults in [configuration](configuration.md#defaults) from `bootvine defaults` |
 
-## Code style and design
+## CI and releases
 
-- [Code style](style.md).
-- [Architecture](architecture.md): the event loop, the console
-  takeover and the workarounds for systemd's private socket.
+Every push and pull request builds and tests bootvine, runs clippy and the
+pre-commit hooks, and evaluates the flake. Builds on `main` go to the `wvhulle`
+[Cachix](https://www.cachix.org) cache, which the flake offers as a
+substituter.
+
+[release-plz](https://release-plz.dev) keeps a pull request labelled `release`
+open that bumps the version and the changelog; merging it publishes the crate,
+tags `v<version>` and creates the Codeberg release. Preview it with
+`release-plz update`. A weekly job opens a pull request that updates
+`Cargo.lock` and `flake.lock`.
