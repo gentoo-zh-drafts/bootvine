@@ -14,4 +14,5 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.ssh_key }}
           directories: bootvine
+          crate-dist-action: liangyongxiang/crate-dist-action@master
           upstream-repo: https://codeberg.org/wvhulle/bootvine
