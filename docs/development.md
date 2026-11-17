@@ -10,7 +10,8 @@
 | `scripted-demos/` | the scripted demos and the VHS tapes that record them |
 | `vm-tests/` | the VM checks: one folder per sample NixOS machine, plus `alpine-openrc/` and `fedora-dracut/` for distributions without Nix |
 | `tasks/` | repository tasks, run with `nix run .#<task>` |
-| `nix/` | the package, the NixOS module and the builds behind the flake |
+| `flake-modules/` | the flake, one [flake-parts](https://flake.parts) module per feature; every file here is loaded |
+| `nix/` | the package, the NixOS module and the builds the flake modules and `default.nix` share |
 
 ## Setup
 
