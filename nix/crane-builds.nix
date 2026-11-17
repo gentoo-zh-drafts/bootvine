@@ -1,51 +1,50 @@
 {
   lib,
-  pkgs,
   craneLib,
   muslCraneLib,
 }:
 let
-  bootvineCrate = craneLib.crateNameFromCargoToml { cargoToml = ../bootvine/Cargo.toml; };
+  bootvinePackageParts = import ./bootvine-package-parts.nix { inherit lib; };
 
   commonArgs = {
-    inherit (bootvineCrate) pname version;
-    src = lib.fileset.toSource {
-      root = ../.;
-      fileset = lib.fileset.unions [
-        (craneLib.fileset.commonCargoSources ../.)
-        ../bootvine/system-files
-        ../.rustfmt.toml
-        ../.clippy.toml
-      ];
-    };
-    strictDeps = true;
+    inherit (bootvinePackageParts) pname version src strictDeps;
   };
 
-  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { pname = "bootvine-workspace"; });
+  bootvine-dependencies = craneLib.buildDepsOnly (
+    commonArgs // { pname = "bootvine-dependencies"; }
+  );
 
   buildWorkspaceMember =
-    args: craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; } // args);
+    args:
+    craneLib.buildPackage (commonArgs // { cargoArtifacts = bootvine-dependencies; } // args);
 in
 {
-  inherit cargoArtifacts;
+  inherit bootvine-dependencies;
 
-  clippy-lints = craneLib.cargoClippy (
-    commonArgs
+  bootvine = buildWorkspaceMember (
+    bootvinePackageParts
     // {
-      inherit cargoArtifacts;
-      cargoClippyExtraArgs = "--workspace --all-targets -- --deny warnings";
+      cargoExtraArgs = "-p bootvine";
     }
   );
 
-  bootvine-openrc-static = muslCraneLib.buildPackage {
-    inherit (commonArgs) src strictDeps;
-    pname = "bootvine-openrc-static";
-    inherit (bootvineCrate) version;
+  bootvine-static = muslCraneLib.buildPackage {
+    inherit (commonArgs) src strictDeps version;
+    pname = "bootvine-static";
     CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
     CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
-    cargoExtraArgs = "-p bootvine --no-default-features --features openrc";
+    cargoExtraArgs = "-p bootvine --features openrc";
     doCheck = false;
+    meta.mainProgram = "bootvine";
   };
+
+  lint-clippy = craneLib.cargoClippy (
+    commonArgs
+    // {
+      cargoArtifacts = bootvine-dependencies;
+      cargoClippyExtraArgs = "--workspace --all-targets -- --deny warnings";
+    }
+  );
 
   scripted-demos = buildWorkspaceMember {
     inherit (craneLib.crateNameFromCargoToml { cargoToml = ../scripted-demos/Cargo.toml; })

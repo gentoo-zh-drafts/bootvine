@@ -11,7 +11,7 @@
 | `scripted-demos/` | the scripted boot, shutdown and passphrase demos, and the VHS tapes that record them |
 | `xtask/` | repository tasks run with `cargo xtask` |
 | `vm-tests/` | the sample NixOS machines, one folder each with its VM check, and `alpine-openrc/`, which boots Alpine with a static OpenRC build |
-| `nix/` | the package, its overlay, the crane builds for CI and the NixOS module |
+| `nix/` | the builds and the NixOS module: `crane-builds.nix` builds every flake output with crane, so `nixos-rebuild` and CI reuse the dependencies in `bootvine-dependencies`; `package.nix` builds the same package with `buildRustPackage` for `default.nix`, without crane; both take the source, metadata and installed unit files from `bootvine-package-parts.nix`; `bootvine-static` is a static musl build for the VM checks of distributions without Nix |
 | `recordings/` | ignored output of `record-screencasts`: the scripted demo GIFs and the sample machine WebP recordings, published on the `recordings` branch for the README and the [guide](guide.md) |
 
 `cargo build` and `cargo test` act on every crate. `bootvine` builds the
@@ -59,9 +59,12 @@ the formatting and ast-grep hooks with `nix run .#run-pre-commit-hooks`.
 `.woodpecker/checks.yaml` runs on Codeberg's
 [Woodpecker CI](https://woodpecker-ci.org) for every push and pull request: the bootvine build with its tests, the xtask build, clippy,
 the pre-commit hooks, an evaluation of every flake output, and the commit-message check on
-pull requests. The workspace dependencies are built or fetched in a step of their own. Builds on `main` are pushed to the `wvhulle` [Cachix](https://www.cachix.org) cache, which
-`nixConfig` in `flake.nix` offers as a substituter. CI tasks are Nushell scripts in `ci/`, exposed as flake apps in `nix/ci-tasks.nix`. The two VM checks need KVM,
-which Codeberg's runners lack, so they only run locally.
+pull requests. The workspace dependencies (`bootvine-dependencies`) are built or fetched in a step of their own. Builds on `main` are pushed to the `wvhulle` [Cachix](https://www.cachix.org) cache, which
+`nixConfig` in `flake.nix` offers as a substituter. CI tasks are Nushell scripts in `ci/`, exposed as flake apps in `nix/ci-tasks.nix`.
+
+Checks are named by kind: `build-*` builds and tests, `lint-*` lints, and
+`vm-*` boots a machine. The `vm-*` checks need KVM, which Codeberg's runners
+lack, so they only run locally.
 
 ## Releases
 

@@ -17,7 +17,7 @@ steps:
     depends_on: []
     environment: *nix_config
     commands:
-      - nix run --quiet .#build-unless-cached -- .#packages.x86_64-linux.workspace-dependencies
+      - nix run --quiet .#build-unless-cached -- .#packages.x86_64-linux.bootvine-dependencies
 
   - name: build-and-test-bootvine
     image: nixos/nix:latest
@@ -26,7 +26,7 @@ steps:
     environment: *nix_config
     commands:
       - nix run --quiet .#import-exported-paths
-      - nix run --quiet .#build-and-export-paths -- .#checks.x86_64-linux.bootvine-build
+      - nix run --quiet .#build-and-export-paths -- .#checks.x86_64-linux.build-bootvine
 
   - name: build-repo-tasks
     image: nixos/nix:latest
@@ -35,7 +35,7 @@ steps:
     environment: *nix_config
     commands:
       - nix run --quiet .#import-exported-paths
-      - nix run --quiet .#build-and-export-paths -- .#checks.x86_64-linux.repo-tasks-build
+      - nix run --quiet .#build-and-export-paths -- .#checks.x86_64-linux.build-repo-tasks
 
   - name: lint-with-clippy
     image: nixos/nix:latest
@@ -44,7 +44,7 @@ steps:
     environment: *nix_config
     commands:
       - nix run --quiet .#import-exported-paths
-      - nix build --quiet --print-build-logs .#checks.x86_64-linux.clippy-lints
+      - nix build --quiet --print-build-logs .#checks.x86_64-linux.lint-clippy
 
   - name: upload-builds-to-cachix
     image: nixos/nix:latest

@@ -49,11 +49,9 @@
               craneLib
               rustToolchain
               ;
-            bootvine = pkgs.callPackage ./nix/package.nix { };
             builds = import ./nix/crane-builds.nix {
               inherit
                 lib
-                pkgs
                 craneLib
                 muslCraneLib
                 ;
@@ -71,25 +69,35 @@
         {
           pkgs,
           builds,
-          bootvine,
           ...
         }:
         {
-          default = bootvine;
-          inherit bootvine;
-          inherit (builds) scripted-demos repo-tasks;
-          workspace-dependencies = builds.cargoArtifacts;
+          default = builds.bootvine;
+          inherit (builds)
+            bootvine
+            bootvine-static
+            bootvine-dependencies
+            scripted-demos
+            repo-tasks
+            ;
           sample-unit-files = pkgs.callPackage ./vm-tests/slow-services/sample-unit-files.nix {
             inherit (vmTests) sampleUnits;
           };
         }
       );
 
-      overlays.default = import ./nix/overlay.nix;
+      overlays.default = final: _: {
+        bootvine = self.packages.${final.stdenv.hostPlatform.system}.bootvine;
+      };
 
       nixosModules = {
         default = self.nixosModules.bootvine;
-        bootvine = ./nix/nixos-module.nix;
+        bootvine =
+          { lib, pkgs, ... }:
+          {
+            imports = [ ./nix/nixos-module.nix ];
+            services.bootvine.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.bootvine;
+          };
       };
 
       nixosConfigurations = lib.mapAttrs' (
@@ -102,7 +110,6 @@
           pkgs,
           system,
           builds,
-          bootvine,
           rustToolchain,
           ...
         }:
@@ -179,18 +186,17 @@
           system,
           pkgs,
           builds,
-          bootvine,
           ...
         }:
         {
-          inherit (builds) clippy-lints;
-          bootvine-build = bootvine;
-          repo-tasks-build = builds.repo-tasks;
+          inherit (builds) lint-clippy;
+          build-bootvine = builds.bootvine;
+          build-repo-tasks = builds.repo-tasks;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
-          alpine-openrc = import ./vm-tests/alpine-openrc/check.nix {
+          vm-alpine-openrc = import ./vm-tests/alpine-openrc/check.nix {
             inherit lib pkgs;
-            staticBootvine = builds.bootvine-openrc-static;
+            staticBootvine = builds.bootvine-static;
           };
         }
         // lib.mapAttrs' (machineName: check: lib.nameValuePair "vm-${machineName}" check) (
@@ -202,12 +208,12 @@
         {
           pkgs,
           craneLib,
-          bootvine,
+          builds,
           ...
         }:
         {
           default = craneLib.devShell {
-            inputsFrom = [ bootvine ];
+            inputsFrom = [ builds.bootvine ];
             packages = [
               pkgs.prek
               pkgs.ast-grep
