@@ -18,7 +18,14 @@ pub enum OwnConsole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Foreground {
     Holding,
+    Switching,
     StayingBehind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnTerminalPlacement {
+    InFront,
+    Behind,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,19 +99,40 @@ impl ConsoleClaim {
 
     #[must_use]
     pub fn is_holding(&self) -> bool {
-        self.foreground == Foreground::Holding
+        matches!(self.foreground, Foreground::Holding | Foreground::Switching)
+    }
+
+    #[must_use]
+    pub fn awaits_own_terminal(&self) -> bool {
+        self.foreground == Foreground::Switching && !self.is_lent()
     }
 
     #[must_use]
     pub fn terminal_switched(&self, active: u16) -> TerminalSwitch {
         match (self.own_console, self.foreground, self.lending) {
-            (OwnConsole::Virtual(own), Foreground::Holding, Lending::Kept | Lending::Returned)
-                if own != active =>
-            {
-                TerminalSwitch::TakenAway
-            }
+            (
+                OwnConsole::Virtual(own),
+                Foreground::Holding | Foreground::Switching,
+                Lending::Kept | Lending::Returned,
+            ) if own != active => TerminalSwitch::TakenAway,
             _ => TerminalSwitch::Ignored,
         }
+    }
+
+    pub fn own_terminal_placed(&mut self, placement: OwnTerminalPlacement) {
+        self.foreground = match (self.foreground, placement) {
+            (Foreground::StayingBehind, _) => Foreground::StayingBehind,
+            (Foreground::Switching, OwnTerminalPlacement::InFront) => {
+                info!("the kernel switched to bootvine's console");
+                Foreground::Holding
+            }
+            (Foreground::Holding, OwnTerminalPlacement::Behind) => {
+                info!("the switch to bootvine's console is still pending, asking again");
+                Foreground::Switching
+            }
+            (_, OwnTerminalPlacement::InFront) => Foreground::Holding,
+            (_, OwnTerminalPlacement::Behind) => Foreground::Switching,
+        };
     }
 
     pub fn reclaimed(&mut self) {
@@ -147,7 +175,7 @@ impl ConsoleClaim {
     pub fn foreground_taken(&mut self, outcome: ForegroundOutcome) {
         if outcome == ForegroundOutcome::Taken {
             info!("password prompt answered, taking the console back");
-            self.foreground = Foreground::Holding;
+            self.foreground = Foreground::Switching;
             self.request(Refresh::Clear);
         }
     }
@@ -218,6 +246,32 @@ mod tests {
         assert!(console.comes_forward(0));
         console.foreground_taken(ForegroundOutcome::Taken);
         assert!(console.is_holding());
+        assert!(console.awaits_own_terminal());
         assert_eq!(console.refresh, Refresh::Clear);
+    }
+
+    #[test]
+    fn a_pending_switch_lasts_until_the_own_terminal_is_in_front() {
+        let mut console = holding_console();
+        console.own_terminal_placed(OwnTerminalPlacement::Behind);
+        assert!(console.awaits_own_terminal());
+        assert_eq!(console.terminal_switched(2), TerminalSwitch::TakenAway);
+        console.marker_seen(MarkerPresence::Present);
+        assert!(!console.awaits_own_terminal());
+        console.marker_seen(MarkerPresence::Absent);
+        assert!(console.awaits_own_terminal());
+        console.own_terminal_placed(OwnTerminalPlacement::InFront);
+        assert!(!console.awaits_own_terminal());
+        assert!(console.is_holding());
+    }
+
+    #[test]
+    fn a_console_left_behind_stays_behind_whatever_the_placement() {
+        let mut console = holding_console();
+        console.release();
+        console.own_terminal_placed(OwnTerminalPlacement::Behind);
+        assert!(!console.awaits_own_terminal());
+        console.own_terminal_placed(OwnTerminalPlacement::InFront);
+        assert!(!console.is_holding());
     }
 }

@@ -7,8 +7,8 @@ use crate::{
     boot_view::{BootProjection, BootView, ShellHandoverSummary, console_palette::ConsoleLook},
     screen_components::{
         console_claim::{
-            ConsoleClaim, ForegroundOutcome, KernelLevel, MarkerPresence, OwnConsole, Refresh,
-            TerminalSwitch,
+            ConsoleClaim, ForegroundOutcome, KernelLevel, MarkerPresence, OwnConsole,
+            OwnTerminalPlacement, Refresh, TerminalSwitch,
         },
         handover::{
             DisplayManager, Handover, ShellReadiness, ShellStart, WatchEnding, WatchFailure,
@@ -44,6 +44,7 @@ pub enum Message {
     AnswerRejected(PathBuf),
     ForegroundTaken(ForegroundOutcome),
     TerminalActivated(u16),
+    OwnTerminalPlaced(OwnTerminalPlacement),
     ResumeMarker(MarkerPresence),
     ConsoleInspected {
         kernel: KernelLevel,
@@ -133,6 +134,10 @@ pub fn update(model: &mut Model, message: Message, now: Duration) -> Vec<Command
             Vec::new()
         }
         Message::TerminalActivated(active) => switch_terminal(model, active),
+        Message::OwnTerminalPlaced(placement) => {
+            model.console.own_terminal_placed(placement);
+            Vec::new()
+        }
         Message::ResumeMarker(marker) => {
             model.console.marker_seen(marker);
             Vec::new()
@@ -185,9 +190,14 @@ fn apply_boot_changes(model: &mut Model, changes: Vec<BootChange>, now: Duration
         .into_iter()
         .for_each(|change| model.boot.apply(change));
     let origin = (model.boot.phase != phase_before).then_some(Command::ReadOrigin);
+    let pending_switch = model
+        .console
+        .awaits_own_terminal()
+        .then_some(Command::ActivateOwnTerminal);
     model.handover.follow_boot(&model.boot, &model.timing, now);
     origin
         .into_iter()
+        .chain(pending_switch)
         .chain([Command::InspectConsole])
         .chain(finish_when_settled(model))
         .collect()
@@ -258,6 +268,12 @@ fn leave_console_to_another_program(model: &mut Model) -> Vec<Command> {
 }
 
 fn switch_terminal(model: &mut Model, active: u16) -> Vec<Command> {
+    if model.console.own_console == OwnConsole::Virtual(active) {
+        model
+            .console
+            .own_terminal_placed(OwnTerminalPlacement::InFront);
+        return Vec::new();
+    }
     if model.console.terminal_switched(active) == TerminalSwitch::Ignored {
         return Vec::new();
     }
@@ -412,6 +428,26 @@ mod tests {
             ),
             handover: Handover::Watching,
         }
+    }
+
+    #[test]
+    fn a_switch_the_kernel_never_completed_is_asked_again_on_each_boot_change() {
+        let mut model = watching_model();
+        let _ = update(
+            &mut model,
+            Message::OwnTerminalPlaced(OwnTerminalPlacement::Behind),
+            MS,
+        );
+        assert!(
+            update(&mut model, shell_job_queued(), 2 * MS).contains(&Command::ActivateOwnTerminal)
+        );
+        assert_eq!(
+            update(&mut model, Message::TerminalActivated(12), 3 * MS),
+            Vec::new()
+        );
+        assert!(
+            !update(&mut model, shell_job_queued(), 4 * MS).contains(&Command::ActivateOwnTerminal)
+        );
     }
 
     #[test]

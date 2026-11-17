@@ -286,6 +286,14 @@ short:
 If the display manager switches terminals while it stops, it is no longer
 running, so bootvine takes the console back.
 
+`VT_ACTIVATE` only queues a switch. While the terminal in front is in
+`VT_PROCESS` mode, as logind keeps a graphical session's terminal, the kernel
+asks its owner to release it and waits. When logind tears the session down it
+sets the terminal back to `VT_AUTO`, which drops the queued switch without
+changing `/sys/class/tty/tty0/active`. bootvine therefore counts its console
+as switching until that attribute names `tty12`, and asks again after each
+batch of boot changes; the stop job of the torn-down session is one of them.
+
 ### Emergency and rescue shells
 
 `bootvine.service` also conflicts with `emergency.service` and
@@ -498,6 +506,8 @@ Subscriptions wait on the kernel or on the init system rather than on timers:
 
 The console log level and font are read after each batch of boot changes,
 since units such as `systemd-sysctl` and `systemd-vconsole-setup` change them.
+A switch to `tty12` that has not completed yet is asked for again at the same
+moment.
 Timers remain only where time itself is the point: frame ticks, deadlines, call
 timeouts and the retry every 100 ms while PID 1 re-executes. Without inotify,
 password requests fall back to a check every 100 ms.

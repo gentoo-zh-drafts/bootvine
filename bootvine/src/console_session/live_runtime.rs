@@ -69,7 +69,7 @@ pub struct LiveRuntime<Manager: ServiceManager> {
 
 fn foreground_of(held_terminal: &HeldTerminal) -> Foreground {
     match held_terminal {
-        HeldTerminal::Holding(_) => Foreground::Holding,
+        HeldTerminal::Holding(_) => Foreground::Switching,
         HeldTerminal::StayingBehind => Foreground::StayingBehind,
     }
 }
@@ -151,12 +151,10 @@ impl<Manager: ServiceManager> ScreenRuntime for LiveRuntime<Manager> {
                     HeldTerminal::StayingBehind => ForegroundOutcome::Refused,
                 })])
             }
-            Command::ActivateOwnTerminal => {
-                if let HeldTerminal::Holding(held) = &self.held_terminal {
-                    let _ = held.insist();
-                }
-                Performed::Now(Vec::new())
-            }
+            Command::ActivateOwnTerminal => Performed::Now(match &self.held_terminal {
+                HeldTerminal::Holding(held) => vec![Message::OwnTerminalPlaced(held.insist())],
+                HeldTerminal::StayingBehind => Vec::new(),
+            }),
             Command::QuietKernel => {
                 let _ = self.kernel.keep_quiet();
                 Performed::Now(Vec::new())

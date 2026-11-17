@@ -2,7 +2,7 @@ use std::{collections::HashSet, fs, io, mem, os::fd::BorrowedFd, ptr};
 
 use bootvine_screen::{
     boot_view::console_palette::{ConsoleLook, ConsolePalette},
-    screen_components::console_claim::KernelLevel,
+    screen_components::console_claim::{KernelLevel, OwnTerminalPlacement},
     screen_settings::font_glyphs::Glyphs,
 };
 use rustix::{
@@ -238,12 +238,6 @@ pub(super) enum HeldTerminal {
     StayingBehind,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum VtOwnership {
-    StillOurs,
-    TakenAway,
-}
-
 fn active_vt() -> Result<u16, Errno> {
     let state: VtState = unsafe { ioctl(stdin(), Getter::<VT_GETSTATE, VtState>::new()) }?;
     Ok(state.active)
@@ -258,20 +252,12 @@ impl ForegroundVt {
         Ok(Self { own, previous })
     }
 
-    pub(super) fn ownership(&self) -> VtOwnership {
+    pub(super) fn insist(&self) -> OwnTerminalPlacement {
         if active_vt().expect("bootvine's own virtual console answers VT_GETSTATE") == self.own {
-            VtOwnership::StillOurs
-        } else {
-            VtOwnership::TakenAway
+            return OwnTerminalPlacement::InFront;
         }
-    }
-
-    pub(super) fn insist(&self) -> VtOwnership {
-        let ownership = self.ownership();
-        if ownership == VtOwnership::TakenAway {
-            activate(self.own).expect("bootvine switched to its own virtual console before");
-        }
-        ownership
+        activate(self.own).expect("bootvine switched to its own virtual console before");
+        OwnTerminalPlacement::Behind
     }
 
     fn stay_switched(self) {

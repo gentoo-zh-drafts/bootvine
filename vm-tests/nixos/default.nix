@@ -48,5 +48,11 @@ in
           inherit pkgs;
         }
       );
+      contested-switch = pkgs.testers.runNixOSTest (
+        import ./contested-switch/check.nix {
+          machine = machines.text-console;
+          inherit pkgs;
+        }
+      );
     };
 }
