@@ -54,11 +54,4 @@ in
     cargoExtraArgs = "-p scripted-demos";
     doCheck = false;
   };
-
-  repo-tasks = buildWorkspaceMember {
-    inherit (craneLib.crateNameFromCargoToml { cargoToml = ../xtask/Cargo.toml; }) pname version;
-    cargoExtraArgs = "-p xtask";
-    doCheck = false;
-    meta.mainProgram = "xtask";
-  };
 }

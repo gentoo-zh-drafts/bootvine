@@ -78,7 +78,6 @@
             bootvine-static
             bootvine-dependencies
             scripted-demos
-            repo-tasks
             ;
           sample-unit-files = pkgs.callPackage ./vm-tests/slow-services/sample-unit-files.nix {
             inherit (vmTests) sampleUnits;
@@ -119,24 +118,6 @@
             program = lib.getExe drv;
           };
 
-          repoTaskApp =
-            name: description: xtaskArguments: runtimeInputs:
-            mkApp (
-              pkgs.runCommand name
-                {
-                  nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
-                  meta.mainProgram = name;
-                }
-                ''
-                  makeWrapper ${lib.getExe builds.repo-tasks} $out/bin/${name} \
-                    --add-flags ${lib.escapeShellArg xtaskArguments} \
-                    --prefix PATH : ${lib.makeBinPath runtimeInputs}
-                ''
-            )
-            // {
-              meta.description = description;
-            };
-
           sampleMachineApps = lib.mapAttrs' (
             machineName: machineDescription:
             lib.nameValuePair "sample-vm-${machineName}" {
@@ -146,8 +127,13 @@
             }
           ) vmTests.machineDescriptions;
 
-          ciTaskApps = import ./nix/ci-tasks.nix {
+          taskApps = import ./nix/task-apps.nix {
             inherit pkgs mkApp;
+            bootvinePackage = builds.bootvine;
+            scriptedDemos = builds.scripted-demos;
+            vmCheckOutputs = pkgs.linkFarm "vm-check-outputs" (
+              lib.mapAttrs (machineName: _: self.checks.${system}."vm-${machineName}") vmTests.machines
+            );
             cargoToolchain = rustToolchain;
             preCommitInputs = [
               rustToolchain
@@ -156,29 +142,7 @@
             extraReleaseInputs = [ pkgs.stdenv.cc ];
           };
         in
-        sampleMachineApps
-        // ciTaskApps
-        // {
-          record-screencasts =
-            repoTaskApp "record-screencasts"
-              "Re-record the scripted demo animations and the sample machine recordings into recordings/; publish them with publish-recordings"
-              "record-screencasts --vm-check-outputs ${
-                pkgs.linkFarm "vm-check-outputs" (
-                  lib.mapAttrs (machineName: _: self.checks.${system}."vm-${machineName}") vmTests.machines
-                )
-              }"
-              [
-                pkgs.vhs
-                pkgs.libwebp
-                builds.scripted-demos
-              ];
-
-          publish-recordings =
-            repoTaskApp "publish-recordings"
-              "Replace the recordings branch on origin with a single commit holding recordings/"
-              "publish-recordings"
-              [ pkgs.gitMinimal ];
-        }
+        sampleMachineApps // taskApps
       );
 
       checks = forEachSystem (
@@ -191,7 +155,6 @@
         {
           inherit (builds) lint-clippy;
           build-bootvine = builds.bootvine;
-          build-repo-tasks = builds.repo-tasks;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           vm-alpine-openrc = import ./vm-tests/alpine-openrc/check.nix {

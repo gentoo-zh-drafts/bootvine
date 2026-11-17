@@ -1,6 +1,9 @@
 {
   pkgs,
   mkApp,
+  bootvinePackage,
+  scriptedDemos,
+  vmCheckOutputs,
   cargoToolchain ? null,
   preCommitInputs ? [ ],
   extraReleaseInputs ? [ ],
@@ -18,20 +21,21 @@ let
       runtimeInputs ? [ ],
       wrapperArgs ? [ ],
     }:
-    pkgs.runCommand name
-      {
-        nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
-        meta.mainProgram = name;
-      }
-      ''
-        makeWrapper ${lib.getExe pkgs.nushell} $out/bin/${name} \
-          --add-flags ${script} \
-          --add-flags ${name} \
-          ${lib.optionalString (runtimeInputs != [ ]) "--prefix PATH : ${lib.makeBinPath runtimeInputs}"} \
-          ${lib.escapeShellArgs wrapperArgs}
-      '';
+    pkgs.writers.writeNuBin name {
+      makeWrapperArgs = [
+        "--add-flags"
+        name
+      ]
+      ++ lib.optionals (runtimeInputs != [ ]) [
+        "--prefix"
+        "PATH"
+        ":"
+        (lib.makeBinPath runtimeInputs)
+      ]
+      ++ wrapperArgs;
+    } script;
 
-  nixBuiltPathsTool = toolArgs: nuScriptTool (toolArgs // { script = ../ci/nix-built-paths.nu; });
+  nixBuiltPathsTool = toolArgs: nuScriptTool (toolArgs // { script = ../tasks/nix-built-paths.nu; });
 
   exportBuiltPathsHook = nixBuiltPathsTool { name = "export-built-paths-hook"; };
 
@@ -50,7 +54,7 @@ let
     name:
     mkApp (nuScriptTool {
       inherit name;
-      script = ../ci/release-tasks.nu;
+      script = ../tasks/release-tasks.nu;
       runtimeInputs =
         cargoInputs
         ++ [
@@ -67,7 +71,7 @@ let
         name: runtimeInputs:
         mkApp (nuScriptTool {
           inherit name runtimeInputs;
-          script = ../ci/release-tasks.nu;
+          script = ../tasks/release-tasks.nu;
         })
       )
       {
@@ -96,7 +100,7 @@ releaseTaskApps
   open-or-update-release-pr = releasePlzApp "open-or-update-release-pr";
   open-dependency-update-pr = mkApp (nuScriptTool {
     name = "open-dependency-update-pr";
-    script = ../ci/dependency-updates.nu;
+    script = ../tasks/dependency-updates.nu;
     runtimeInputs = cargoInputs ++ [
       pkgs.gitMinimal
       pkgs.tea
@@ -115,4 +119,39 @@ releaseTaskApps
     name = "upload-exported-paths";
     runtimeInputs = [ pkgs.cachix ];
   });
+  record-screencasts =
+    mkApp (nuScriptTool {
+      name = "record-screencasts";
+      script = ../tasks/recordings.nu;
+      runtimeInputs = [
+        pkgs.vhs
+        pkgs.libwebp
+        scriptedDemos
+      ];
+      wrapperArgs = [
+        "--add-flags"
+        "${vmCheckOutputs}"
+      ];
+    })
+    // {
+      meta.description = "Re-record the scripted demo animations and the sample machine recordings into recordings/; publish them with publish-recordings";
+    };
+  publish-recordings =
+    mkApp (nuScriptTool {
+      name = "publish-recordings";
+      script = ../tasks/recordings.nu;
+      runtimeInputs = [ pkgs.gitMinimal ];
+    })
+    // {
+      meta.description = "Replace the recordings branch on origin with a single commit holding recordings/";
+    };
+  sync-default-config =
+    mkApp (nuScriptTool {
+      name = "sync-default-config";
+      script = ../tasks/default-config.nu;
+      runtimeInputs = [ bootvinePackage ];
+    })
+    // {
+      meta.description = "Rewrite the defaults block in docs/configuration.md from `bootvine defaults`";
+    };
 }

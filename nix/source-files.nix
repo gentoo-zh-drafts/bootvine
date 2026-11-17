@@ -9,7 +9,6 @@ lib.fileset.toSource {
   fileset = lib.fileset.unions [
     ../Cargo.toml
     ../Cargo.lock
-    ../.cargo/config.toml
     ../.rustfmt.toml
     ../.clippy.toml
     (lib.fileset.intersection (lib.fileset.unions workspaceMemberDirectories) (

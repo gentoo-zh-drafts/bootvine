@@ -28,15 +28,6 @@ steps:
       - nix run --quiet .#import-exported-paths
       - nix run --quiet .#build-and-export-paths -- .#checks.x86_64-linux.build-bootvine
 
-  - name: build-repo-tasks
-    image: nixos/nix:latest
-    depends_on: [prepare-build-dependencies]
-    when: *after_dependency_step
-    environment: *nix_config
-    commands:
-      - nix run --quiet .#import-exported-paths
-      - nix run --quiet .#build-and-export-paths -- .#checks.x86_64-linux.build-repo-tasks
-
   - name: lint-with-clippy
     image: nixos/nix:latest
     depends_on: [prepare-build-dependencies]
@@ -48,7 +39,7 @@ steps:
 
   - name: upload-builds-to-cachix
     image: nixos/nix:latest
-    depends_on: [build-and-test-bootvine, build-repo-tasks]
+    depends_on: [build-and-test-bootvine]
     when:
       - event: [push, manual]
         branch: main
