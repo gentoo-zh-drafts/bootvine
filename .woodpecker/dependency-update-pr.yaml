@@ -25,4 +25,4 @@ steps:
       CODEBERG_TOKEN:
         from_secret: bot_token
     commands:
-      - nix develop --quiet --command nu tasks/dependency-updates.nu open-dependency-update-pr --cargo-lock --flake-lock
+      - nix develop --quiet .#ci-cargo --command nu tasks/dependency-updates.nu open-dependency-update-pr --cargo-lock --flake-lock

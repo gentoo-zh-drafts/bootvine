@@ -109,7 +109,10 @@ Run them from the repository root inside the dev shell (direnv, or `nix develop`
 ## CI and releases
 
 Every push and pull request builds and tests bootvine, runs clippy and the
-pre-commit hooks, and evaluates the flake. Builds on `main` go to the `wvhulle`
+pre-commit hooks, and evaluates the flake. CI steps run the tasks in small
+shells that hold only what they need: `nix develop .#ci` for the scripts and
+`.#ci-cargo` when they also need the Rust toolchain. The default shell adds
+what only local work needs, such as `vhs` to record the screencasts. Builds on `main` go to the `wvhulle`
 [Cachix](https://www.cachix.org) cache, which the flake offers as a
 substituter.
 
