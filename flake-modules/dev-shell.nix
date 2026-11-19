@@ -1,14 +1,14 @@
 {
   perSystem =
     {
+      config,
       pkgs,
       craneLib,
-      builds,
       ...
     }:
     {
       devShells.default = craneLib.devShell {
-        inputsFrom = [ builds.bootvine ];
+        inputsFrom = [ config.packages.bootvine ];
         packages = [
           pkgs.prek
           pkgs.ast-grep

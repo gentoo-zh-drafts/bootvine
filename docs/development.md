@@ -11,7 +11,7 @@
 | `vm-tests/` | the VM checks, one folder per operating system: `nixos/` with a folder per sample machine, `alpine/` and `fedora/` |
 | `tasks/` | repository tasks, run with `nix run .#<task>` |
 | `flake-modules/` | the flake, one [flake-parts](https://flake.parts) module per feature; every file here is loaded |
-| `nix/` | the package, the NixOS module and the builds the flake modules and `default.nix` share |
+| `nix/` | what works without flakes, through `default.nix`: the package, the NixOS module and the overlay, plus the source and metadata the flake's build shares with them |
 
 ## Setup
 
