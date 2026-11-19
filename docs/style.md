@@ -33,7 +33,7 @@ Each language only where it is the native one for the job:
 - Nix for builds, checks and machine definitions; config files are generated
   from Nix values, not written by hand.
 - Python only for the test scripts of the NixOS VM checks.
-- Nushell for every repository task in `tasks/`; they need nothing compiled,
+- Nushell for every repository task in `tasks/`, run from the dev shell; they need nothing compiled,
   so CI can run them before the dependencies are built.
 - Shell only where the host tool requires it: the dracut module, the
   mkinitcpio hook and the OpenRC init script.

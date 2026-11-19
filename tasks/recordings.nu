@@ -26,33 +26,44 @@ def frames-at-final-size []: list<path> -> list<path> {
   $frame_paths | where { ($in | png-frame-size) == $final_size }
 }
 
-def encode-machine-recording []: path -> nothing {
-  let check_output = $in
-  let machine_name = $check_output | path basename
-  let kept_frames = glob ($check_output | path join recording "*.png") | sort | frames-at-final-size
+def encode-machine-recording []: record<name: string, check_output: path> -> nothing {
+  let machine_check = $in
+  let kept_frames = glob ($machine_check.check_output | path join recording "*.png") | sort | frames-at-final-size
   if ($kept_frames | is-empty) {
     error make {
-      msg: $"($check_output) has no recording frames"
+      msg: $"($machine_check.check_output) has no recording frames"
     }
   }
-  let animation_path = $RECORDINGS_DIRECTORY | path join $"($machine_name).webp"
+  let animation_path = $RECORDINGS_DIRECTORY | path join $"($machine_check.name).webp"
   ^img2webp -loop 0 -min_size -mixed -d $RECORDING_FRAME_MILLISECONDS ...$kept_frames -o $animation_path
 }
 
-def "main record-screencasts" [
-  vm_check_outputs: path
-]: nothing -> nothing {
+def built-output [installable: string]: nothing -> path {
+  ^nix build --no-link --print-out-paths $installable | str trim
+}
+
+def sample-machine-names []: nothing -> list<string> {
+  ^nix eval --json .#nixosConfigurations --apply builtins.attrNames
+  | from json
+  | each { str replace --regex '^sample-' '' }
+}
+
+def "main record-screencasts" []: nothing -> nothing {
   if not ($SCREENCAST_TAPES | all { path exists }) {
     error make {
       msg: "no VHS tapes here; run from the repository root"
     }
   }
   mkdir $RECORDINGS_DIRECTORY
-  for tape_path in $SCREENCAST_TAPES {
-    ^vhs $tape_path
+  let scripted_demos = built-output .#scripted-demos | path join bin
+  with-env {PATH: ($env.PATH | prepend $scripted_demos)} {
+    for tape_path in $SCREENCAST_TAPES {
+      ^vhs $tape_path
+    }
   }
-  for check_output in (ls $vm_check_outputs | get name | sort) {
-    $check_output | encode-machine-recording
+  for machine_name in (sample-machine-names) {
+    let check_output = built-output $".#checks.x86_64-linux.vm-($machine_name)"
+    {name: $machine_name, check_output: $check_output} | encode-machine-recording
   }
 }
 

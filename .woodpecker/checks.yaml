@@ -17,7 +17,7 @@ steps:
     depends_on: []
     environment: *nix_config
     commands:
-      - nix run --quiet .#build-unless-cached -- .#packages.x86_64-linux.bootvine-dependencies
+      - nix develop --quiet --command nu tasks/nix-built-paths.nu build-unless-cached .#packages.x86_64-linux.bootvine-dependencies
 
   - name: build-and-test-bootvine
     image: nixos/nix:latest
@@ -25,8 +25,8 @@ steps:
     when: *after_dependency_step
     environment: *nix_config
     commands:
-      - nix run --quiet .#import-exported-paths
-      - nix run --quiet .#build-and-export-paths -- .#checks.x86_64-linux.build-bootvine
+      - nix develop --quiet --command nu tasks/nix-built-paths.nu import-exported-paths
+      - nix develop --quiet --command nu tasks/nix-built-paths.nu build-and-export-paths .#checks.x86_64-linux.build-bootvine
 
   - name: lint-with-clippy
     image: nixos/nix:latest
@@ -34,7 +34,7 @@ steps:
     when: *after_dependency_step
     environment: *nix_config
     commands:
-      - nix run --quiet .#import-exported-paths
+      - nix develop --quiet --command nu tasks/nix-built-paths.nu import-exported-paths
       - nix build --quiet --print-build-logs .#checks.x86_64-linux.lint-clippy
 
   - name: upload-builds-to-cachix
@@ -49,7 +49,7 @@ steps:
       CACHIX_AUTH_TOKEN:
         from_secret: cachix_auth_token
     commands:
-      - nix run --quiet .#upload-exported-paths
+      - nix develop --quiet --command nu tasks/nix-built-paths.nu upload-exported-paths
 
   - name: run-pre-commit-hooks
     image: nixos/nix:latest
@@ -57,7 +57,7 @@ steps:
     when: *after_dependency_step
     environment: *nix_config
     commands:
-      - nix run --quiet .#run-pre-commit-hooks
+      - nix develop --quiet --command prek run --all-files --show-diff-on-failure
 
   - name: evaluate-flake-outputs
     image: nixos/nix:latest
@@ -73,7 +73,7 @@ steps:
       - event: pull_request
     environment: *nix_config
     commands:
-      - nix run --quiet .#check-commit-messages -- --fetch-target-branch FETCH_HEAD..HEAD
+      - nix develop --quiet --command nu tasks/release-tasks.nu check-commit-messages --fetch-target-branch FETCH_HEAD..HEAD
 
   - name: check-release-pr-is-current
     image: nixos/nix:latest
@@ -83,4 +83,4 @@ steps:
         evaluate: 'CI_COMMIT_SOURCE_BRANCH startsWith "release-plz-"'
     environment: *nix_config
     commands:
-      - nix run --quiet .#check-release-pr-is-current
+      - nix develop --quiet --command nu tasks/release-tasks.nu check-release-pr-is-current

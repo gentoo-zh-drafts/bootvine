@@ -9,7 +9,7 @@
 | `bootvine-systemd-link/`, `bootvine-openrc-link/` | the systemd and OpenRC sides |
 | `scripted-demos/` | the scripted demos and the VHS tapes that record them |
 | `vm-tests/` | the VM checks, one folder per operating system: `nixos/` with a folder per sample machine, `alpine/` and `fedora/` |
-| `tasks/` | repository tasks, run with `nix run .#<task>` |
+| `tasks/` | repository tasks as Nushell scripts, run from the dev shell with `nu tasks/<file>.nu <task>` |
 | `flake-modules/` | the flake, one [flake-parts](https://flake.parts) module per feature; every file here is loaded |
 | `nix/` | what works without flakes, through `default.nix`: the package, the NixOS module and the overlay, plus the source and metadata the flake's build shares with them |
 
@@ -29,7 +29,7 @@ systemd by default; add `--features openrc` for both, or
 cargo clippy --workspace --all-targets
 ast-grep scan --error
 cargo fmt --all
-nix run .#check-commit-messages -- origin/main..HEAD
+nu tasks/release-tasks.nu check-commit-messages origin/main..HEAD
 ```
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org).
@@ -98,11 +98,13 @@ the top of its `check.nix`; `nix build` prints the new hash after a mismatch.
 
 ## Repository tasks
 
+Run them from the repository root inside the dev shell (direnv, or `nix develop`).
+
 | Task | Does |
 | --- | --- |
-| `nix run .#record-screencasts` | re-records the demo animations and the VM check recordings into `recordings/` |
-| `nix run .#publish-recordings` | force-pushes `recordings/` to the `recordings` branch, which the README and the guide link to |
-| `nix run .#sync-default-config` | rewrites the defaults in [configuration](configuration.md#defaults) from `bootvine defaults` |
+| `nu tasks/recordings.nu record-screencasts` | re-records the demo animations and the VM check recordings into `recordings/` |
+| `nu tasks/recordings.nu publish-recordings` | force-pushes `recordings/` to the `recordings` branch, which the README and the guide link to |
+| `nu tasks/default-config.nu sync-default-config` | rewrites the defaults in [configuration](configuration.md#defaults) from `bootvine defaults` |
 
 ## CI and releases
 

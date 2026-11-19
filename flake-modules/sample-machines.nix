@@ -6,8 +6,6 @@ let
   };
 in
 {
-  _module.args = { inherit sampleMachines; };
-
   flake.nixosConfigurations = lib.mapAttrs' (
     machineName: _:
     lib.nameValuePair "sample-${machineName}" (sampleMachines.nixosSystemFor "x86_64-linux" machineName)

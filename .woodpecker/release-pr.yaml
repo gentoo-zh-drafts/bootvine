@@ -26,4 +26,4 @@ steps:
       CODEBERG_TOKEN:
         from_secret: bot_token
     commands:
-      - nix run --quiet .#open-or-update-release-pr
+      - nix develop --quiet --command nu tasks/release-tasks.nu open-or-update-release-pr

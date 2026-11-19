@@ -34,4 +34,4 @@ steps:
     image: nixos/nix:latest
     environment: *release_env
     commands:
-      - nix run --quiet .#publish-unreleased-crate-version
+      - nix develop --quiet --command nu tasks/release-tasks.nu publish-unreleased-crate-version

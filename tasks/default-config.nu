@@ -7,7 +7,7 @@ const FENCE_CLOSE = "```\n"
 
 def "main sync-default-config" []: nothing -> nothing {
   let doc_text = open --raw $CONFIGURATION_DOC
-  let printed_defaults = ^bootvine defaults | str trim --right
+  let printed_defaults = ^cargo run --quiet --package bootvine -- defaults | str trim --right
   let heading_start = $doc_text | str index-of $DEFAULTS_HEADING
   if $heading_start < 0 {
     error make {msg: $"($CONFIGURATION_DOC) has no ($DEFAULTS_HEADING | str trim) heading"}
