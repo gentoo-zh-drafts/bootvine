@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://codeberg.org/wvhulle/bootvine/compare/v0.1.4...v0.1.5) - 2026-11-23
+
+### Added
+
+- build without libdbus or libsystemd headers
+- read the journal without libsystemd
+- add bootvine health to check the install, the initramfs and this boot's run
+
+### Changed
+
+- read the journal with sdjournal
+- follow the error, option, tuple and iterator conventions in the zbus and journal code
+
+### Documentation
+
+- improve phrasing
+- give each operating system its own install and configuration page
+
+### Fixed
+
+- keep systemd's status output silenced until the shutdown screen
+- report errors that were silently discarded
+- start after dracut-cmdline-ask so its console prompt is not blocked
+- retry the switch to the own console until the kernel completes it
+
 ## [0.1.4](https://codeberg.org/wvhulle/bootvine/compare/v0.1.3...v0.1.4) - 2026-11-13
 
 ### Added

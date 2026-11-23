@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "bootvine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bootvine-openrc-link",
  "bootvine-screen",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "bootvine-openrc-link"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bootvine-screen",
  "futures",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "bootvine-screen"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "futures-core",
  "heck",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "bootvine-systemd-link"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bootvine-screen",
  "futures",

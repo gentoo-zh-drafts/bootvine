@@ -9,13 +9,13 @@ name = "bootvine-systemd-link"
 readme = "../README.md"
 repository = "https://codeberg.org/wvhulle/bootvine"
 rust-version = "1.95"
-version = "0.1.3"
+version = "0.1.4"
 
 [lints]
 workspace = true
 
 [dependencies]
-bootvine-screen = { version = "0.1.3", path = "../bootvine-screen" }
+bootvine-screen = { version = "0.1.4", path = "../bootvine-screen" }
 futures = { version = "0.3.34", default-features = false, features = [
   "std",
   "async-await",
