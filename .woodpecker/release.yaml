@@ -35,3 +35,11 @@ steps:
     environment: *release_env
     commands:
       - nix develop --quiet .#ci-cargo --command nu tasks/release-tasks.nu publish-unreleased-crate-version
+
+  - name: open-or-update-release-pr
+    image: nixos/nix:latest
+    environment: *release_env
+    commands:
+      - nix develop --quiet .#ci-cargo --command nu tasks/release-tasks.nu open-or-update-release-pr
+    when:
+      - status: [success, failure]
